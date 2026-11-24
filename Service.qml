@@ -137,24 +137,6 @@ Item {
   property var escalated: ({})
   // host -> when its feed dropped; its threads show as stale for 10 minutes.
   property var staleSince: ({})
-  // Waits that ended with their thread gone, announced by finishTimer.
-  // shortcut: archiving or deleting a waiting thread in T3 also reads as
-  // finished, and so does an interrupted turn whose wait ends; the feed can't
-  // tell those apart without reading archived threads.
-  property var finishing: []
-  Timer {
-    id: finishTimer
-    interval: 5000
-    onTriggered: {
-      var due = root.finishing
-      root.finishing = []
-      due.forEach(function(f) {
-        var s = root.sources[f.host]
-        if (!s || f.host in root.staleSince || s.threads.some(function(x) { return x.id === f.t.id })) return
-        root.announce(Object.assign({}, f.t, { env: f.env, host: f.host }), false)
-      })
-    }
-  }
   // host -> its latest snapshot, while another host shows the same machine.
   property var shadow: ({})
 
@@ -180,6 +162,7 @@ Item {
   }
 
   function receive(host, parsed) {
+    adoptLegacyPlans(host, parsed.env)
     // One machine reached under two names (a manual host and a discovered
     // alias) is shown once: the first host to report an environment keeps it.
     // The other host's latest snapshot is kept, so it takes over the moment
@@ -192,12 +175,6 @@ Item {
     delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
-    // A finished wait is announced only if the thread is still gone a few
-    // seconds later: a wake run can land a poll after the wait closes.
-    if (!first && root.sources[host]) Model.finishedWaits(root.sources[host].threads, parsed.threads, Date.now()).forEach(function(t) {
-      root.finishing = root.finishing.concat([{ host: host, env: parsed.env, t: t }])
-      finishTimer.restart()
-    })
     root.seen[host] = Model.keys(parsed.threads)
     setSource(host, parsed)
     tidy(parsed.env, host, parsed.threads)
@@ -213,15 +190,7 @@ Item {
     var plan = Object.assign({}, root.plan), resuming = Object.assign({}, root.resuming), changed = false
     Object.keys(plan).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]], e = plan[key]
-      if (parts[0] !== env) {
-        // Saved before plans followed the machine, under its host name: move it.
-        if (parts[0] !== host) return
-        delete plan[key]
-        changed = true
-        key = env + "|" + parts[1]
-        if (plan[key]) return
-        plan[key] = e
-      }
+      if (parts[0] !== env) return
       // A thread missing from a full snapshot may only be past the row cap.
       if (!t) { if (list.length < 50) { delete plan[key]; changed = true } return }
       // A plan belongs to one stop: the same reset and the same end time.
@@ -234,6 +203,21 @@ Item {
       if (parts[0] === env && (!t || !Model.finished(t))) delete resuming[key]
     })
     root.resuming = resuming
+    if (changed) setPlan(plan)
+  }
+
+  // Plans saved before they followed the machine are keyed by host name; any
+  // route that reports the machine moves them, shown or not, so a plan made
+  // under "mac" still fires when "mac-wan" is the route that shows it.
+  function adoptLegacyPlans(host, env) {
+    var plan = Object.assign({}, root.plan), changed = false
+    Object.keys(plan).forEach(function(key) {
+      var parts = key.split("|")
+      if (parts[0] !== host || parts[0] === env) return
+      if (!plan[env + "|" + parts[1]]) plan[env + "|" + parts[1]] = plan[key]
+      delete plan[key]
+      changed = true
+    })
     if (changed) setPlan(plan)
   }
 

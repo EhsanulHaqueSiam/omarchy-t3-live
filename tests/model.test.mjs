@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine owner planExpired finishedWaits merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine owner planExpired merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -259,10 +259,5 @@ assert.equal(M.planExpired({ resetAt: 10 * H, ended: 1 * H, dismissed: 0 }, 22 *
 assert.equal(M.planExpired({ resetAt: 10 * H, ended: 1 * H, dismissed: 0 }, 24 * H), true)
 assert.equal(M.planExpired({ resetAt: 0, ended: 0, dismissed: 5 * H }, 17 * H), false)
 assert.equal(M.planExpired({ resetAt: 0, ended: 0, dismissed: 5 * H }, 19 * H), true)
-
-// A wait that ends with no new turn still finishes, once; a capped snapshot proves nothing.
-assert.deepEqual(M.finishedWaits([t("w", "waiting", 1), t("x", "working", 1)], [t("x", "done", 1, 5)], 9).map(x => x.id + ":" + x.state + "@" + x.ended), ["w:done@9"])
-assert.deepEqual(M.finishedWaits([t("w", "waiting", 1)], [t("w", "working", 1)], 9), [])
-assert.deepEqual(M.finishedWaits([t("w", "waiting", 1)], Array.from({ length: 50 }, (_, i) => t("n" + i, "working", 1)), 9), [])
 
 console.log("model tests passed")

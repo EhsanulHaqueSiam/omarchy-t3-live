@@ -101,14 +101,31 @@ WITH live AS (
     AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs o WHERE o.thread_id = t.thread_id AND o.status <> 'queued')
     -- Its queued first run already shows it as starting.
     AND t.thread_id NOT IN (SELECT thread_id FROM live)
+), waitdone AS (
+  -- A wait that ended: a background item finished after the turn did (5 s
+  -- later, so the turn's own last writes don't count). Its thread is done for
+  -- 2 minutes from then, like any finish; an archived one never gets here.
+  -- shortcut: only turns that ended in the last 24 h are checked, which keeps
+  -- each poll cheap; a longer wait ends without a Done.
+  SELECT r.thread_id, max(i.updated_at) AS at
+  FROM orchestration_v2_projection_runs r
+  JOIN orchestration_v2_projection_turn_items i ON i.thread_id = r.thread_id
+    AND i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('completed', 'failed', 'cancelled', 'interrupted')
+    AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
+    AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', r.completed_at, '+5 seconds')
+  WHERE r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-24 hours')
+    AND r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
+                     WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
+  GROUP BY r.thread_id
 ), ended AS (
   -- Only a thread's latest run counts: a failure an earlier run had is history.
   SELECT r.run_id, r.thread_id, r.status, coalesce(json_extract(r.payload_json, '\$.startedAt'), r.requested_at) AS since,
-         r.completed_at AS ended
+         coalesce((SELECT w.at FROM waitdone w WHERE w.thread_id = r.thread_id AND r.status = 'completed'), r.completed_at) AS ended
   FROM orchestration_v2_projection_runs r
   WHERE r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
                      WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
-    AND ((r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds'))
+    AND ((r.status = 'completed' AND (r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
+        OR r.thread_id IN (SELECT thread_id FROM waitdone)))
       OR (r.status = 'failed' AND (r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')
         -- A usage limit stays until 12 hours past its reset, so a resume planned for then fires.
         OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items i

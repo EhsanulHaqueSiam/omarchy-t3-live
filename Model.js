@@ -356,18 +356,6 @@ function transitions(prev, threads) {
   })
 }
 
-// A wait that ends with no new turn (an unwatch, a background task that just
-// stops) is past the feed's 2-minute done window, so the thread leaves without
-// a "done": these are the ones to announce as finished. Only from a full
-// snapshot (under the 50-row cap), where a missing thread is really gone.
-function finishedWaits(prev, threads, now) {
-  if (threads.length >= 50) return []
-  var ids = {}
-  threads.forEach(function(t) { ids[t.id] = true })
-  return prev.filter(function(t) { return t.state === "waiting" && !ids[t.id] })
-    .map(function(t) { return Object.assign({}, t, { state: "done", ended: now }) })
-}
-
 function keys(threads) {
   var out = {}
   threads.forEach(function(t) { out[t.id] = stateKey(t) })

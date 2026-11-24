@@ -562,11 +562,15 @@ BarWidget {
                     anchors.verticalCenter: parent.verticalCenter
                   }
                   Text {
+                    // Room for this name: what's left of the line when nothing follows it,
+                    // otherwise 35% so the PR and issue stay in view.
+                    readonly property real room: index === row.metaParts.length - 1
+                      ? metaLine.width - parent.x - parent.children[0].implicitWidth - parent.spacing : metaLine.width * 0.35
                     // The project gives way first, so the machine and PR stay in view.
                     width: index === 0 && row.t.project ? Math.min(implicitWidth, metaLine.width * 0.4)
-                      : index <= 1 ? Math.min(implicitWidth, metaLine.width * 0.35) : implicitWidth
+                      : index <= 1 ? Math.min(implicitWidth, room) : implicitWidth
                     // A machine name that would be cut ("this ma…") shows as its icon alone.
-                    visible: !(modelData[3] === "machine" && implicitWidth > metaLine.width * 0.35)
+                    visible: !(modelData[3] === "machine" && implicitWidth > room)
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
                     text: modelData[1]
