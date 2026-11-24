@@ -112,10 +112,13 @@ WITH live AS (
   -- is released without a new turn (an awaited provider task or a PR watch
   -- that ends without waking the agent); T3 usually wakes it, and that turn
   -- brings the Done.
-  SELECT r.thread_id, max(i.updated_at) AS at
+  -- Work that was cancelled (a T3 restart, Stop) ended nothing: no Done. The
+  -- first finish after the turn is the Done's time, so a later one in the same
+  -- 2 minutes can't change its key and toast again.
+  SELECT r.thread_id, min(i.updated_at) AS at
   FROM orchestration_v2_projection_runs r
   JOIN orchestration_v2_projection_turn_items i ON i.thread_id = r.thread_id
-    AND i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('completed', 'failed', 'cancelled', 'interrupted')
+    AND i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('completed', 'failed')
     AND NOT (i.type = 'dynamic_tool' AND json_extract(i.payload_json, '\$.input.persistent') IS 1)
     AND coalesce((SELECT x.status FROM orchestration_v2_projection_runs x WHERE x.run_id = i.run_id), '') <> 'rolled_back'
     AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
