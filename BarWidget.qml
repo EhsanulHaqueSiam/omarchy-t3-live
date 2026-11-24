@@ -274,7 +274,7 @@ BarWidget {
     open: root.popupOpen
     contentWidth: popup.fittedContentWidth(Style.space(348))
     // A long list scrolls inside a card about eight rows tall.
-    contentHeight: popup.fittedContentHeight(Math.min(list.contentHeight, Style.space(560)))
+    contentHeight: popup.fittedContentHeight(list.contentHeight, Style.space(560))
 
     // Rows come in once per opening, a few at a time; they reset unseen
     // after the card has faded out.
@@ -302,6 +302,8 @@ BarWidget {
       anchors.fill: parent
       model: rows
       clip: true
+      // In a long list the headline comes back as soon as you scroll up.
+      headerPositioning: ListView.PullBackHeader
       interactive: contentHeight > height
       boundsBehavior: Flickable.StopAtBounds
 
@@ -544,7 +546,8 @@ BarWidget {
                   }
                   Text {
                     // The project gives way first, so the machine and PR stay in view.
-                    width: index === 0 ? Math.min(implicitWidth, metaLine.width * 0.4) : implicitWidth
+                    width: index === 0 && row.t.project ? Math.min(implicitWidth, metaLine.width * 0.4)
+                      : index <= 1 ? Math.min(implicitWidth, metaLine.width * 0.35) : implicitWidth
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
                     text: modelData[1]

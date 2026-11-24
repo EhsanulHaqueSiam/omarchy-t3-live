@@ -150,13 +150,21 @@ Item {
   function planFor(t) { return root.plan[planKey(t)] }
   function limitPhase(t) { return Model.limitPhase(t, root.now, planFor(t)) }
   function isSnoozed(t) { return Model.snoozed(t, root.now, planFor(t)) }
-  function isResuming(t) { return !!root.resuming[planKey(t)] }
+  // Sent and waiting for its machine, or still queued behind another send.
+  function isResuming(t) {
+    var key = planKey(t)
+    return !!root.resuming[key] || root.jobs.some(function(j) { return j.key === key })
+  }
   function rowActions(t) {
     var p = planFor(t)
     return Model.actions(t, { phase: limitPhase(t), snoozed: isSnoozed(t), ownSnooze: !!(p && p.snooze), resuming: isResuming(t) })
   }
 
   function receive(host, parsed) {
+    // One machine reached under two names (a manual host and a discovered
+    // alias) is shown once: the first host to report an environment keeps it.
+    var owner = Object.keys(root.sources).filter(function(h) { return h !== host && root.sources[h] && root.sources[h].env === parsed.env })[0]
+    if (owner !== undefined) return
     delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
@@ -237,9 +245,6 @@ Item {
       ? ["bash", "-lc", 'exec "$@"', "bash", "timeout", "60", "t3", "thread", "send", t.id, root.resumeMessage]
       : ["timeout", "60", "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", t.host,
          'PATH="$HOME/.local/bin:$HOME/.t3/bin:$PATH" t3 thread send ' + t.id + ' "' + root.resumeMessage + '"']
-    var resuming = Object.assign({}, root.resuming)
-    resuming[key] = Date.now()
-    root.resuming = resuming
     root.jobs = root.jobs.concat([{ argv: argv, key: key, title: t.title, env: t.env, id: t.id, ended: t.ended }])
     pump()
   }
@@ -297,6 +302,8 @@ Item {
     })
     root.plan = plan
     root.planLoaded = true
+    // Check the loaded plan against what the feeds already reported.
+    Object.keys(root.sources).forEach(function(h) { if (root.sources[h]) root.tidy(h, root.sources[h].threads) })
     pruneTimer.restart()
   }
 
@@ -307,7 +314,9 @@ Item {
       var p = planFor(t)
       // T3's own auto-resume, armed since, owns the reset: never send twice.
       if (t.recovery && t.recovery.autoResume) return
-      if (p && p.resume && t.state === "limited" && Model.limitPhase(t, root.now, p) === "reset") resumeNow(t)
+      // The plan must be for this very stop, even if it loaded after the snapshot.
+      var forThisStop = p && t.failure && p.resetAt === t.failure.resetAt && (!p.ended || p.ended === t.ended)
+      if (forThisStop && p.resume && t.state === "limited" && Model.limitPhase(t, root.now, p) === "reset") resumeNow(t)
     })
   }
 
@@ -321,7 +330,7 @@ Item {
       var job = root.jobs[0]
       root.jobs = root.jobs.slice(1)
       var t = root.allThreads.filter(function(x) { return planKey(x) === job.key })[0]
-      if (!t || !Model.stopped(t) || t.ended !== job.ended || (t.recovery && t.recovery.autoResume)) {
+      if (!t || !Model.stopped(t) || t.ended !== job.ended || (t.recovery && t.recovery.autoResume) || Model.dismissed(t, root.plan[job.key])) {
         var resuming = Object.assign({}, root.resuming)
         delete resuming[job.key]
         root.resuming = resuming
@@ -503,8 +512,11 @@ Item {
     id: discover
     command: ["sh", root.localPath("discover.sh")]
     stdout: StdioCollector {
+      // Only a complete answer (ending in "ok") replaces what was known.
       onStreamFinished: {
-        root.linkedText = Model.parseHosts(text.split("\n").join(",")).join(",")
+        var lines = text.split("\n").filter(function(l) { return l !== "" })
+        if (lines[lines.length - 1] !== "ok") return
+        root.linkedText = Model.parseHosts(lines.slice(0, -1).join(",")).join(",")
         root.discovered = true
       }
     }

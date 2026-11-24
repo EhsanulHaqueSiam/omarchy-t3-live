@@ -160,7 +160,9 @@ assert.ok(M.luminance("#ffffff") > 0.9 && M.luminance("#101315") < 0.1)
 assert.ok(M.contrast(M.readable("#584e51", "#101315", "#e0e0e0", 4.5), "#101315") >= 4.5)
 assert.ok(M.contrast(M.readable(pal.yellow, "#cc101315", pal.fg), pal.bg) >= 3)
 // Toast text can't turn into markup, however many times it is decoded.
-assert.equal(M.toastText("<b>x</b> &amp;"), "\u2039b\u203ax\u2039/b\u203a &amp;")
+assert.equal(M.toastText("<b>x</b>"), "\u2039b\u203ax\u2039/b\u203a")
+for (const s of ["&lt;b&gt;x&lt;/b&gt;", "&#60;b&#62;", "&#x3c;a href=&quot;u&quot;&#x3e;", "&amp;lt;b&amp;gt;"])
+  assert.ok(!/&#?[A-Za-z0-9]+;/.test(M.toastText(s)), s)
 
 // New fields from another machine are checked too.
 const extra = M.parseLine(JSON.stringify({ env, threads: [{ id, state: "working", title: "x", projectColor: "Blue; rm", issue: "#40471" }, { id: id2, state: "working", title: "y", projectColor: "indigo", issue: "<b>1</b>" }] })).threads

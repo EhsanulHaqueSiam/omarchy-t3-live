@@ -228,8 +228,9 @@ function readable(hex, bg, fg, target) {
 // Toast text shows as typed: Omarchy's notifications decode entities more
 // than once before rendering their few allowed tags, so escaping alone can't
 // keep "<b>" literal. Angle brackets become look-alikes instead.
+// Entities are broken too, so "&lt;b&gt;" can't decode into a tag.
 function toastText(text) {
-  return String(text || "").replace(/</g, "\u2039").replace(/>/g, "\u203a")
+  return String(text || "").replace(/&(?=#?[A-Za-z0-9]+;)/g, "&\u2060").replace(/</g, "\u2039").replace(/>/g, "\u203a")
 }
 // Black or white, whichever reads better on a filled button.
 function inkOn(fill) {

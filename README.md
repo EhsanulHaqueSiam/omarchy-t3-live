@@ -15,7 +15,7 @@ It speaks the language of T3 Code's own mobile live notification: one word when 
 - **Decisions happen where the context is.** Answering a question, approving a command or settling a thread needs the whole thread, so those open it in T3 Code. The list only does what needs no context: resume, wait for a limit, snooze, dismiss.
 - **Mirror T3, don't fork it.** Its words, its colors, its resume message. It reads T3's state and never writes it; the only thing it keeps is a small plan file whose entries end on their own.
 - **Fit Omarchy.** Theme surfaces, Omarchy's motion rules (short, ease-out, no bounce, off when animations are off) and plain-text safety for anything that comes from another machine.
-- **Left out on purpose:** answering inline, a message box, history, usage meters (Omarchy's Agents widget has those), and settings beyond the three you might actually change.
+- **Left out on purpose:** answering inline, a message box, history, usage meters (Omarchy's Agents widget has those), and settings beyond the few you might actually change.
 
 ## Install
 
@@ -29,7 +29,7 @@ To remove it:
 
 ```sh
 omarchy plugin remove siam.t3-live
-rm -rf ~/.local/state/omarchy-t3-live   # its plan file, if you want it gone too
+rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-t3-live/plan.json"   # its plan file, if you want it gone too
 ```
 
 ## The island
