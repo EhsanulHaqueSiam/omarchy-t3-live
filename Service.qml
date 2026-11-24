@@ -335,7 +335,13 @@ Item {
     })
     root.plan = plan
     // Check the loaded plan against what the feeds already reported.
-    // Not a stale machine's: its stopped threads are hidden, not gone.
+    // Feeds that reported before the file loaded: adopt old host-keyed plans
+    // from every route, shown or shadowed, then tidy. Not a stale machine's:
+    // its stopped threads are hidden, not gone.
+    Object.keys(root.sources).concat(Object.keys(root.shadow)).forEach(function(h) {
+      var s = root.sources[h] || root.shadow[h]
+      if (s) root.adoptLegacyPlans(h, s.env)
+    })
     Object.keys(root.sources).forEach(function(h) { if (root.sources[h] && !(h in root.staleSince)) root.tidy(root.sources[h].env, h, root.sources[h].threads) })
     pruneExpired()
   }

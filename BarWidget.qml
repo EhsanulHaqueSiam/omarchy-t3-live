@@ -289,7 +289,8 @@ BarWidget {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.bottom: parent.bottom
-      height: Style.space(28)
+      // Short, so the last visible row's detail stays readable.
+      height: Style.space(16)
       visible: list.contentHeight > list.height + 1
       // A few pixels short of the end counts as the end (atYEnd can miss by one).
       opacity: list.contentY - list.originY + list.height >= list.contentHeight - Style.space(6) ? 0 : 1

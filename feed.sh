@@ -105,12 +105,19 @@ WITH live AS (
   -- A wait that ended: a background item finished after the turn did (5 s
   -- later, so the turn's own last writes don't count). Its thread is done for
   -- 2 minutes from then, like any finish; an archived one never gets here.
+  -- Only items that could have held it (as in pend): no persistent tools, no
+  -- rolled-back runs.
   -- shortcut: only turns that ended in the last 24 h are checked, which keeps
-  -- each poll cheap; a longer wait ends without a Done.
+  -- each poll cheap; a longer wait ends without a Done. So does a wait that
+  -- is released without a new turn (an awaited provider task or a PR watch
+  -- that ends without waking the agent); T3 usually wakes it, and that turn
+  -- brings the Done.
   SELECT r.thread_id, max(i.updated_at) AS at
   FROM orchestration_v2_projection_runs r
   JOIN orchestration_v2_projection_turn_items i ON i.thread_id = r.thread_id
     AND i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('completed', 'failed', 'cancelled', 'interrupted')
+    AND NOT (i.type = 'dynamic_tool' AND json_extract(i.payload_json, '\$.input.persistent') IS 1)
+    AND coalesce((SELECT x.status FROM orchestration_v2_projection_runs x WHERE x.run_id = i.run_id), '') <> 'rolled_back'
     AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
     AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', r.completed_at, '+5 seconds')
   WHERE r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-24 hours')
