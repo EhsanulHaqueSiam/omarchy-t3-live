@@ -328,32 +328,40 @@ BarWidget {
 
       // "2 need you  5 active", like the live notification's title, on the
       // rows' icon line. Snoozed threads are out of the way on purpose.
-      header: Row {
-        readonly property var awake: root.service ? root.service.awakeThreads : []
-        readonly property var head: Model.summary(awake, root.service ? root.service.snoozedCount : 0)
-        readonly property int activeTotal: awake.filter(function(t) { return Model.live(t) || Model.asking(t) }).length
-        x: Style.space(6)
-        spacing: Style.space(8)
-        bottomPadding: Style.space(6)
+      // Opaque, because it pulls back over the rows mid-scroll.
+      header: Rectangle {
+        width: list.width
+        height: headRow.height
+        color: popup.surface
+        z: 2
+        Row {
+          id: headRow
+          readonly property var awake: root.service ? root.service.awakeThreads : []
+          readonly property var head: Model.summary(awake, root.service ? root.service.snoozedCount : 0)
+          readonly property int activeTotal: awake.filter(function(t) { return Model.live(t) || Model.asking(t) }).length
+          x: Style.space(6)
+          spacing: Style.space(8)
+          bottomPadding: Style.space(6)
 
-        Text {
-          id: headline
-          textFormat: Text.PlainText
-          text: strings.tn(parent.head[0], parent.head[1]).arg(parent.head[1])
-          color: Commons.Color.popups.text
-          font.family: Style.font.family
-          font.pixelSize: Style.font.body
-          font.bold: true
-        }
-        Text {
-          visible: parent.activeTotal > 0 && parent.head[0] !== "summary.working"
-          anchors.baseline: headline.baseline
-          textFormat: Text.PlainText
-          text: strings.tn("summary.active", parent.activeTotal).arg(parent.activeTotal)
-          color: Commons.Color.popups.text
-          opacity: 0.55
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
+          Text {
+            id: headline
+            textFormat: Text.PlainText
+            text: strings.tn(parent.head[0], parent.head[1]).arg(parent.head[1])
+            color: Commons.Color.popups.text
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+          Text {
+            visible: parent.activeTotal > 0 && parent.head[0] !== "summary.working"
+            anchors.baseline: headline.baseline
+            textFormat: Text.PlainText
+            text: strings.tn("summary.active", parent.activeTotal).arg(parent.activeTotal)
+            // Muted, yet 4.5:1 like every small text here.
+            color: Model.readable(String(Qt.tint(Commons.Color.popups.text, Qt.rgba(popup.surface.r, popup.surface.g, popup.surface.b, 0.45))), String(popup.surface), root.pal.fg, 4.5)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
         }
       }
 
@@ -371,10 +379,15 @@ BarWidget {
         readonly property bool hasButtons: buttonsFor.length > 0
         readonly property bool dimmed: !!root.service && root.service.isSnoozed(t)
         readonly property bool resuming: !!root.service && root.service.isResuming(t)
-        readonly property color tint: root.phaseOn(kind, popup.surface)
-        readonly property color ink: Commons.Color.popups.text
+        // A snoozed row is drawn in one muted color that still reads at 4.5:1;
+        // fading it with opacity would sink its small text below that.
+        readonly property color muted: Model.readable(String(Qt.tint(Commons.Color.popups.text, Qt.rgba(popup.surface.r, popup.surface.g, popup.surface.b, 0.5))), String(popup.surface), root.pal.fg, 4.5)
+        readonly property color tint: dimmed ? muted : root.phaseOn(kind, popup.surface)
+        readonly property color ink: dimmed ? muted : Commons.Color.popups.text
         readonly property real inset: Style.space(8)
-        readonly property bool alert: (kind === "failed" || kind === "limited") && !resuming
+        // A limit whose resume is already planned is handled, not an alarm.
+        readonly property bool alert: (kind === "failed" || kind === "limited") && !resuming && !dimmed
+          && !(kind === "limited" && root.service && ["t3", "t3reset", "armed"].indexOf(root.service.limitPhase(t)) !== -1)
         readonly property bool wraps: kind === "input" || kind === "perm" || kind === "failed"
         readonly property string detail: {
           switch (kind) {
@@ -409,7 +422,7 @@ BarWidget {
         readonly property var metaParts: {
           var parts = []
           // Small text: lifted to 4.5:1 and drawn at full strength.
-          var small = function(hex) { return Model.readable(hex, String(popup.surface), root.pal.fg, 4.5) }
+          var small = function(hex) { return row.dimmed ? String(row.muted) : Model.readable(hex, String(popup.surface), root.pal.fg, 4.5) }
           if (t.project) parts.push(["󰉋", t.project, small(Model.projectColor(t.projectColor, root.pal))])
           parts.push([t.host === "" ? "󰌢" : "󰒋", t.host === "" ? strings.t("thisMachine") : t.host, small(root.pal.cyan)])
           var pr = Model.prLook(t.pr, root.pal)
@@ -465,12 +478,9 @@ BarWidget {
           onClicked: root.openThread(row.t)
         }
 
-        // A snoozed row dims its text, never its Wake button.
         Item {
           id: body
           anchors.fill: parent
-          opacity: row.dimmed ? 0.5 : 1
-          Behavior on opacity { NumberAnimation { duration: Style.duration(180) } }
 
           Text {
             id: mark
@@ -505,6 +515,7 @@ BarWidget {
               font.family: Style.font.family
               font.pixelSize: Style.font.body
               font.bold: true
+              Behavior on color { ColorAnimation { duration: Style.duration(180) } }
             }
             Text {
               id: detailLine
@@ -516,7 +527,7 @@ BarWidget {
               textFormat: Text.PlainText
               text: row.detail
               color: row.alert ? row.tint : row.ink
-              opacity: row.alert ? 1 : 0.82
+              opacity: row.alert || row.dimmed ? 1 : 0.82
               font.family: root.barFont
               font.pixelSize: Style.font.bodySmall
               Behavior on color { ColorAnimation { duration: Style.duration(200) } }

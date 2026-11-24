@@ -81,7 +81,6 @@ function rank(t) {
 // Where a limited thread stands, given what the plugin planned for it
 // (plan: { resume, snooze } or undefined):
 //   "reset"  the limit has reset: it can resume now
-//   "t3"     T3 itself resumes it at the reset (its own auto-resume is armed)
 //   "armed"  the plugin resumes it at the reset
 //   "wait"   nothing planned yet
 //   "t3" / "t3reset" T3 itself resumes it at the reset (its own auto-resume
@@ -157,7 +156,7 @@ function face(c, flash, numbersOnly) {
     : [{ kind: "mark", phase: flash }, { kind: "word", key: flash, arg: "", phase: flash }]
   var w = numbersOnly ? null : chip(c)
   if (w) return [{ kind: "mark", phase: w[2] }, { kind: "word", key: w[0], arg: w[1], phase: w[2] === "working" ? "" : w[2] }]
-  var out = [{ kind: "mark", phase: c.input || c.perm ? "working" : (c.live ? "working" : "") }]
+  var out = [{ kind: "mark", phase: c.live || c.input || c.perm ? "working" : "" }]
   var n = { live: c.live, input: c.input, perm: c.perm, stopped: (c.failed || 0) + (c.limited || 0), stale: c.stale }
   ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["stale", "stale"]].forEach(function(p) {
     if (!(n[p[0]] > 0)) return

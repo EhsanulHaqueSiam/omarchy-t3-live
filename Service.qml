@@ -138,6 +138,8 @@ Item {
   property var escalated: ({})
   // host -> when its feed dropped; its threads show as stale for 10 minutes.
   property var staleSince: ({})
+  // host -> its latest snapshot, while another host shows the same machine.
+  property var shadow: ({})
 
   // Asks the widget on the focused monitor to open or close its list.
   signal toggleRequested()
@@ -163,8 +165,11 @@ Item {
   function receive(host, parsed) {
     // One machine reached under two names (a manual host and a discovered
     // alias) is shown once: the first host to report an environment keeps it.
+    // The other host's latest snapshot is kept, so it takes over the moment
+    // the first one drops (its feed only prints again on a change).
     var owner = Object.keys(root.sources).filter(function(h) { return h !== host && root.sources[h] && root.sources[h].env === parsed.env })[0]
-    if (owner !== undefined) return
+    if (owner !== undefined) { root.shadow[host] = parsed; return }
+    delete root.shadow[host]
     delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
@@ -199,18 +204,34 @@ Item {
     if (changed) setPlan(plan)
   }
 
-  // The host is gone from settings: forget it.
+  // The host is gone from settings: forget it, and let another host that
+  // reaches the same machine show it.
   function drop(host) {
+    var s = root.sources[host]
     delete root.seen[host]
     delete root.staleSince[host]
+    delete root.shadow[host]
     setSource(host, null)
+    var alt = s ? standIn(s.env) : undefined
+    if (alt !== undefined) {
+      var p = root.shadow[alt]
+      delete root.shadow[alt]
+      receive(alt, p)
+    }
+  }
+  // A host whose live feed reports this environment but isn't shown.
+  function standIn(env) {
+    return Object.keys(root.shadow).filter(function(h) { return root.shadow[h].env === env })[0]
   }
 
   // The host's feed ended (machine asleep, network down): keep what it was
   // doing on screen as stale, like mobile's "Waiting for an update".
   function lose(host) {
-    delete root.seen[host]
+    delete root.shadow[host]
     var s = root.sources[host]
+    // Another host still reaches that machine: it takes over, nothing goes stale.
+    if (s && standIn(s.env) !== undefined) return drop(host)
+    delete root.seen[host]
     if (!s) return
     // Retries that fail again keep the first drop time, so stale rows still leave.
     if (!(host in root.staleSince)) root.staleSince[host] = Date.now()
@@ -303,7 +324,8 @@ Item {
     root.plan = plan
     root.planLoaded = true
     // Check the loaded plan against what the feeds already reported.
-    Object.keys(root.sources).forEach(function(h) { if (root.sources[h]) root.tidy(h, root.sources[h].threads) })
+    // Not a stale machine's: its stopped threads are hidden, not gone.
+    Object.keys(root.sources).forEach(function(h) { if (root.sources[h] && !(h in root.staleSince)) root.tidy(h, root.sources[h].threads) })
     pruneTimer.restart()
   }
 
@@ -521,8 +543,9 @@ Item {
       }
     }
   }
+  // Every 10 minutes; every minute until the first answer (T3 starts late at login).
   Timer {
-    interval: 600000
+    interval: root.discovered ? 600000 : 60000
     repeat: true
     running: root.linked
     triggeredOnStart: true
