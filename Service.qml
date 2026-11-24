@@ -18,6 +18,12 @@ Item {
   // setting never rebuilds the feeds.
   property string hostsText: ""
   property bool notify: true
+  // True once a widget has passed its settings in; until then a plan for a
+  // remote machine must not look like one for a removed machine.
+  property bool hostsReady: false
+  // "t3": T3's own vivid phase colors (the default); "theme": the Omarchy
+  // theme's palette. Surfaces, text and borders follow the theme either way.
+  property string colors: "t3"
   readonly property var hosts: [""].concat(Model.parseHosts(hostsText))
 
   // host ("" for this machine) -> { env, threads } from that machine's feed.
@@ -34,8 +40,8 @@ Item {
   // Moves only while a limited thread is listed, so limits reset on time.
   property real now: Date.now()
 
-  // Snoozed threads stay out of the bar and sit at the end of the list.
-  // Dismissed threads are gone from the list; snoozed ones sit at its end.
+  // Dismissed threads are gone from the list; snoozed ones stay out of the
+  // bar and sit at the end of the list.
   readonly property var threads: {
     var awake = [], asleep = []
     root.allThreads.forEach(function(t) {
@@ -46,6 +52,53 @@ Item {
     return awake.concat(asleep)
   }
   readonly property var awakeThreads: threads.filter(function(t) { return !Model.snoozed(t, root.now, root.plan[planKey(t)]) })
+  readonly property int snoozedCount: threads.length - awakeThreads.length
+
+  // ---- Theme ----
+  // The current Omarchy theme's palette, read from its colors.toml like
+  // Omarchy's own apps do, and read again whenever the shell reloads the
+  // theme. Anything a theme leaves out falls back to the shell's own roles.
+  property var themeColors: ({})
+  readonly property var palette: {
+    var c = root.themeColors, k = Commons.Color
+    var pick = function(names, fallback) {
+      for (var i = 0; i < names.length; i++) if (c[names[i]]) return c[names[i]]
+      return String(fallback)
+    }
+    var base = { muted: String(k.muted), fg: String(k.foreground), bg: String(k.background) }
+    if (root.colors !== "theme")
+      return Object.assign(Model.t3Palette(Model.luminance(base.bg) > 0.4), base)
+    return Object.assign({
+      red: pick(["red", "color1"], k.urgent), green: pick(["green", "color2"], "#6ee7b7"),
+      yellow: pick(["yellow", "color3"], k.warning), blue: pick(["blue", "color4"], k.accent),
+      magenta: pick(["magenta", "color5"], "#a5b4fc"), cyan: pick(["cyan", "color6"], "#7dd3fc")
+    }, base)
+  }
+
+  function loadTheme(text) {
+    var out = {}
+    String(text || "").split("\n").forEach(function(line) {
+      var m = line.match(/^\s*([a-z0-9_]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+      if (m) out[m[1]] = m[2].toLowerCase()
+    })
+    root.themeColors = out
+  }
+
+  FileView {
+    id: themeFile
+    path: Commons.Color.currentThemePath + "/colors.toml"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.loadTheme(text())
+    onFileChanged: reload()
+  }
+  // A theme switch replaces the theme folder; the shell's own colors change
+  // when it does, so follow them.
+  Connections {
+    target: Commons.Color
+    function onBackgroundChanged() { themeFile.reload() }
+    function onAccentChanged() { themeFile.reload() }
+  }
   readonly property int liveCount: Model.count(awakeThreads, "working") + Model.count(awakeThreads, "starting")
   readonly property int inputCount: Model.count(awakeThreads, "input")
   readonly property int permCount: Model.count(awakeThreads, "perm")
@@ -111,9 +164,11 @@ Item {
     Object.keys(plan).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]], e = plan[key]
       if (parts[0] !== host) return
-      var limitHolds = !(e.resume || e.snooze) || (t && t.state === "limited" && t.failure && t.failure.resetAt === e.resetAt)
-      var dismissalHolds = !e.dismissed || (t && t.ended === e.dismissed)
-      if (!t || !Model.stopped(t) || !limitHolds || !dismissalHolds) { delete plan[key]; changed = true }
+      // A thread missing from a full snapshot may only be past the row cap.
+      if (!t) { if (list.length < 50) { delete plan[key]; changed = true } return }
+      var limitHolds = !(e.resume || e.snooze) || (t.state === "limited" && t.failure && t.failure.resetAt === e.resetAt)
+      var dismissalHolds = !e.dismissed || t.ended === e.dismissed
+      if (!Model.stopped(t) || !limitHolds || !dismissalHolds) { delete plan[key]; changed = true }
     })
     Object.keys(resuming).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]]
@@ -159,18 +214,20 @@ Item {
   function resumeNow(t) {
     var key = planKey(t)
     // One send per stop: a second click, or a toast and the row, must not
-    // queue a second turn. T3's CLI queues a message on a busy thread.
-    if (root.resuming[key] || !Model.stopped(t)) return
+    // queue a second turn (T3's CLI queues a message on a busy thread), and
+    // a limit T3 resumes itself is left to T3.
+    if (root.resuming[key] || !Model.stopped(t) || (t.recovery && t.recovery.autoResume)) return
+    // 60 s at most, so one hung send can't hold up every later resume.
     var argv = t.host === ""
-      ? ["bash", "-lc", 'exec "$@"', "bash", "t3", "thread", "send", t.id, root.resumeMessage]
-      : ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", t.host,
+      ? ["bash", "-lc", 'exec "$@"', "bash", "timeout", "60", "t3", "thread", "send", t.id, root.resumeMessage]
+      : ["timeout", "60", "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", t.host,
          'PATH="$HOME/.local/bin:$HOME/.t3/bin:$PATH" t3 thread send ' + t.id + ' "' + root.resumeMessage + '"']
     var resuming = Object.assign({}, root.resuming)
     resuming[key] = Date.now()
     root.resuming = resuming
     var plan = Object.assign({}, root.plan)
     if (plan[key]) { delete plan[key]; setPlan(plan) }
-    root.jobs = root.jobs.concat([{ argv: argv, key: key, title: t.title, env: t.env, id: t.id }])
+    root.jobs = root.jobs.concat([{ argv: argv, key: key, title: t.title, env: t.env, id: t.id, ended: t.ended }])
     pump()
   }
 
@@ -202,7 +259,8 @@ Item {
   // Debounced: at startup the hosts arrive from the widget a moment after the
   // plan loads, and a plan for "mac" must not be dropped before they do.
   onHostsChanged: pruneTimer.restart()
-  Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded) root.pruneHosts() }
+  onHostsReadyChanged: pruneTimer.restart()
+  Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded && root.hostsReady) root.pruneHosts() }
   property bool planLoaded: false
 
   function setPlan(plan) {
@@ -241,12 +299,23 @@ Item {
   // One resume at a time; each reports a failure as a toast.
   property var jobs: []
   property var job: null
+  // Each send is checked against the latest snapshot first: the thread must
+  // still be stopped at the same stop, and not since armed by T3 itself.
   function pump() {
-    if (resumer.running || root.jobs.length === 0) return
-    root.job = root.jobs[0]
-    root.jobs = root.jobs.slice(1)
-    resumer.command = root.job.argv
-    resumer.running = true
+    while (!resumer.running && root.jobs.length > 0) {
+      var job = root.jobs[0]
+      root.jobs = root.jobs.slice(1)
+      var t = root.allThreads.filter(function(x) { return planKey(x) === job.key })[0]
+      if (!t || !Model.stopped(t) || t.ended !== job.ended || (t.recovery && t.recovery.autoResume)) {
+        var resuming = Object.assign({}, root.resuming)
+        delete resuming[job.key]
+        root.resuming = resuming
+        continue
+      }
+      root.job = job
+      resumer.command = job.argv
+      resumer.running = true
+    }
   }
 
   Process {
@@ -258,8 +327,9 @@ Item {
         var resuming = Object.assign({}, root.resuming)
         delete resuming[job.key]
         root.resuming = resuming
-        Util.execArgv(["omarchy-notification-send", "--app-name", "T3 Live", "-u", "normal", "-g", "󰀨",
-          Model.safeArg(strings.t("toast.resumeFailed").arg(job.title)), "--action", strings.t("open"), "sh", root.openPath, job.env, job.id])
+        if (root.notify)
+          Util.execArgv(["omarchy-notification-send", "--app-name", "T3 Live", "-u", "normal", "-g", "󰀨",
+            Model.safeArg(strings.t("toast.resumeFailed").arg(job.title)), "--action", strings.t("open"), "sh", root.openPath, job.env, job.id])
       }
       root.pump()
     }
@@ -294,7 +364,9 @@ Item {
     if (!root.notify) return
     var took = Model.elapsed((t.ended || Date.now()) - t.since)
     var open = ["--action", strings.t("open"), "sh", root.openPath, t.env, t.id]
-    var ipc = function(label, method) { return ["--action", strings.t(label), "omarchy-shell", "siam.t3-live", method, t.env, t.id] }
+    // Toast buttons name the exact stop they were for, so an old toast can't
+    // act on a later failure of the same thread.
+    var ipc = function(label, method) { return ["--action", strings.t(label), "omarchy-shell", "siam.t3-live", method, t.env, t.id, String(t.ended)] }
     var toast
     switch (t.state) {
       case "input": toast = ["normal", "󱜸", still ? "toast.still" : "toast.input", t.question || strings.t("heading.input"), open.slice(0, 1).concat([strings.t("answer")], open.slice(2))]; break
@@ -394,14 +466,15 @@ Item {
       return JSON.stringify({ live: root.liveCount, input: root.inputCount, perm: root.permCount, stale: root.staleCount,
         failed: root.failedCount, limited: root.limitedCount, plan: root.plan, threads: root.threads })
     }
-    function resume(env: string, id: string): void { root.withThread(env, id, root.resumeNow) }
-    function resumeAtReset(env: string, id: string): void { root.withThread(env, id, root.armResume) }
-    function snooze(env: string, id: string): void { root.withThread(env, id, root.snooze) }
+    function resume(env: string, id: string, stop: string): void { root.withThread(env, id, stop, root.resumeNow) }
+    function resumeAtReset(env: string, id: string, stop: string): void { root.withThread(env, id, stop, root.armResume) }
+    function snooze(env: string, id: string, stop: string): void { root.withThread(env, id, stop, root.snooze) }
   }
 
-  function withThread(env, id, action) {
+  // Acts only on the very stop the caller saw (its end time).
+  function withThread(env, id, stop, action) {
     var t = root.allThreads.filter(function(x) { return x.env === env && x.id === id })[0]
-    if (t && Model.stopped(t)) action(t)
+    if (t && Model.stopped(t) && String(t.ended) === stop) action(t)
   }
 
   Instantiator {

@@ -2,10 +2,6 @@
   "working": "Working",
   "liveCount": "%1 live",
   "waiting": "Waiting",
-  "live": "%1 live",
-  "input": "%1 input",
-  "perm": "%1 perm",
-  "staleCount": "%1 waiting",
   "done": "Done",
   "failed": "Failed",
   "thisMachine": "this machine",
@@ -14,7 +10,6 @@
   "open": "Open",
   "heading.starting": "Starting",
   "heading.input": "Question for you",
-  "heading.perm": "Approval needed",
   "heading.stale": "Waiting for an update",
   "finishedIn": "Finished in %1",
   "failedAfter": "Failed after %1",
@@ -104,5 +99,13 @@
   "tip.stale": {
     "one": "%1 out of date",
     "other": "%1 out of date"
+  },
+  "summary.stale": {
+    "one": "%1 out of date",
+    "other": "%1 out of date"
+  },
+  "summary.snoozed": {
+    "one": "%1 snoozed",
+    "other": "%1 snoozed"
   }
 }

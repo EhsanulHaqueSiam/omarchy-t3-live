@@ -11,10 +11,13 @@
 #     "permDetail", the command or file a perm thread asks about
 #     "step",       [type, detail] of a working thread's latest item
 #     "pr",         {n, state, checks, review} of its newest pull request
+#     "issue",      its first linked issue, as T3 shows it ("#40471")
+#     "projectColor" the project's T3 icon color name ("gray", "blue", ...)
 #     "since",      when the run (or the pending request) started
 #     "ended"}]}    when the run ended. Done threads stay listed for 2 minutes;
-#                   failed and limited ones for 12 hours, until they are settled
-#                   or resumed, and not while T3 has them snoozed
+#                   failed ones for 12 hours and limited ones until their limit
+#                   resets (at least 12 hours), until settled or resumed, and
+#                   not while T3 has them snoozed
 # Run it locally with `sh feed.sh`, or on another machine with
 # `ssh <host> sh -s < feed.sh`. Pass `once` to print the current state and exit.
 # It only reads T3's database, opened read-only.
@@ -39,7 +42,11 @@ WITH live AS (
   WHERE r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
                      WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
     AND ((r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds'))
-      OR (r.status = 'failed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')))
+      OR (r.status = 'failed' AND (r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')
+        -- A usage limit stays until it resets, so a resume planned for then survives.
+        OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items i
+          WHERE i.thread_id = r.thread_id AND i.run_id = r.run_id AND i.type = 'error' AND i.status = 'failed'
+            AND json_extract(i.payload_json, '\$.failure.resetAt') > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))))
     AND r.thread_id NOT IN (SELECT thread_id FROM live)
 ), act AS (
   SELECT thread_id, since, NULL AS ended, NULL AS outcome, running, NULL AS run_id FROM live
@@ -53,6 +60,8 @@ WITH live AS (
   GROUP BY thread_id
 ), rows AS (
   SELECT t.thread_id AS id, t.title, coalesce(p.title, '') AS project,
+    coalesce(json_extract(p.project_icon_json, '\$.color'), '') AS projectColor,
+    coalesce(json_extract(t.payload_json, '\$.issues[0].displayKey'), '') AS issue,
     (SELECT json_extract(i.payload_json, '\$.failure')
       FROM orchestration_v2_projection_turn_items i
       WHERE x.outcome = 'failed' AND i.thread_id = t.thread_id AND i.run_id = x.run_id
@@ -118,7 +127,7 @@ WITH live AS (
   LIMIT 50
 )
 SELECT json_group_array(json_object('id', id, 'title', substr(title, 1, 120),
-  'project', substr(project, 1, 60),
+  'project', substr(project, 1, 60), 'projectColor', substr(projectColor, 1, 16), 'issue', substr(issue, 1, 24),
   'state', CASE WHEN state = 'failed' AND json_extract(failure, '\$.class') = 'usage_limit' THEN 'limited' ELSE state END,
   'askKind', askKind, 'permDetail', permDetail,
   'failure', CASE WHEN failure IS NULL THEN NULL ELSE json_object('class', json_extract(failure, '\$.class'),

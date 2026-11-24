@@ -33,7 +33,7 @@ Nothing running and nothing stopped: the island fades out and gives its space ba
 
 ## The list
 
-One row per thread: the title, one line of what is happening now, and project · machine · pull request. Each state shows only the buttons it needs:
+One row per thread: the title, one line of what is happening now, and a line with its project (in the project's T3 color), its machine, its pull request (colored by state: open, failing, merged, closed) and its linked issue, each with its own icon. Each state shows only the buttons it needs:
 
 | State | The line under the title | Buttons |
 | --- | --- | --- |
@@ -63,6 +63,12 @@ The bar is for a glance and the list is for choosing where to go. Anything that 
 - **Dismiss** hides a failed thread here until it stops again. It does not settle the thread in T3: T3 has no way for other programs to settle a thread, so the plugin doesn't pretend to. Failed threads also leave on their own once you settle them in T3, or after 12 hours.
 
 Plans (on reset, snooze, dismiss) are kept in `~/.local/state/omarchy-t3-live/plan.json` and end on their own when the thread moves on. Everything else is read from T3, never written: there is no inline answering, no message box, no history, and no usage meters (Omarchy's Agents widget has those).
+
+## Colors
+
+By default the phases use T3 Code's own vivid colors, the same ones as its web sidebar and mobile live notification; on a light theme they switch to their darker shades. Everything else, the island, the card, text and borders, follows your Omarchy theme and changes with it. Set the widget's **Colors** setting to **Theme** (`"colors": "Theme"` in its bar entry) to take the phase colors from the theme's palette too. Any color too faint for its background is lifted until it reads.
+
+Rows move rather than jump: a thread that starts waiting on you glides to the top, a new one fades in, a finished one fades out, and colors ease when a state changes.
 
 ## Notifications
 

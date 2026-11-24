@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed dismissed actions tooltip stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed dismissed actions tooltip readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -126,6 +126,38 @@ assert.deepEqual(M.permText({ askKind: "command", permDetail: "", step: { type: 
 
 // The tooltip names each count.
 assert.deepEqual(M.tooltip({ live: 3, input: 1, perm: 0, stale: 0, failed: 1, limited: 1 }), [["tip.working", 3], ["tip.input", 1], ["tip.stopped", 2]])
+
+// T3 owns a limit it armed itself: no Resume before or after its reset.
+assert.equal(M.limitPhase(L({ autoResume: true, snooze: false }), late, undefined), "t3reset")
+assert.equal(A("limited", { phase: "t3reset" }), "")
+
+// The headline: working means running now; stale-only and snoozed-only say so.
+assert.deepEqual(M.summary([t("s", "stale", 1)], 0), ["summary.stale", 1])
+assert.deepEqual(M.summary([], 2), ["summary.snoozed", 2])
+assert.deepEqual(M.summary([t("w", "working", 1), t("s", "stale", 1)], 0), ["summary.working", 1])
+
+// Theme colors: too-dim colors are lifted to read; button labels pick black or white.
+const pal = { red: "#c38b7b", green: "#87a9b0", yellow: "#6B5E73", blue: "#b59790", magenta: "#c4d8e2", cyan: "#a5a0b6", muted: "#584e51", fg: "#e0e0e0", bg: "#101315" }
+assert.ok(M.contrast(M.readable(pal.yellow, pal.bg, pal.fg), pal.bg) >= 3)
+assert.equal(M.readable("#7dd3fc", "#000000", "#ffffff"), "#7dd3fc")
+assert.equal(M.inkOn("#fcd34d"), "#000000")
+assert.equal(M.inkOn("#4f46e5"), "#ffffff")
+assert.equal(M.phaseColor("input", pal), pal.magenta)
+assert.equal(M.phaseColor("limited", pal), pal.red)
+assert.equal(M.projectColor("indigo", pal), pal.blue)
+assert.equal(M.projectColor("gray", pal), pal.muted)
+assert.deepEqual(M.prLook({ state: "merged" }, pal), ["\uf419", pal.magenta])
+assert.deepEqual(M.prLook({ state: "open", checks: "failure" }, pal), ["\uf407", pal.red])
+assert.equal(M.prLook(null, pal), null)
+
+// T3's vivid palette by default, its darker stops on a light surface.
+assert.equal(M.t3Palette(false).yellow, "#fcd34d")
+assert.equal(M.t3Palette(true).magenta, "#4f46e5")
+assert.ok(M.luminance("#ffffff") > 0.9 && M.luminance("#101315") < 0.1)
+
+// New fields from another machine are checked too.
+const extra = M.parseLine(JSON.stringify({ env, threads: [{ id, state: "working", title: "x", projectColor: "Blue; rm", issue: "#40471" }, { id: id2, state: "working", title: "y", projectColor: "indigo", issue: "<b>1</b>" }] })).threads
+assert.deepEqual(extra.map(x => [x.projectColor, x.issue]), [["", "#40471"], ["indigo", ""]])
 
 // The island face: one word when chip() gives one, colored counts for a mix,
 // the finish word during a flash, and numbers only on a vertical bar.

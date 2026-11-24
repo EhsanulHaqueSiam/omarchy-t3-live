@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "siam.t3-live",
   "name": "T3 Live",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "author": "EhsanulHaqueSiam",
   "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or permission, and what just finished, with toasts. Covers this machine and any ssh hosts.",
   "kinds": [
@@ -21,7 +21,8 @@
     "defaultSection": "right",
     "defaults": {
       "sshHosts": "",
-      "notify": true
+      "notify": true,
+      "colors": "T3"
     },
     "schema": [
       {
@@ -37,6 +38,17 @@
         "label": "Notifications",
         "defaultValue": true,
         "description": "Toast when a thread needs you or finishes, and once more if a question waits 5 minutes."
+      },
+      {
+        "key": "colors",
+        "type": "enum",
+        "label": "Colors",
+        "options": [
+          "T3",
+          "Theme"
+        ],
+        "defaultValue": "T3",
+        "description": "T3 uses T3 Code's own vivid phase colors. Theme takes them from the Omarchy theme's palette. Backgrounds and text follow the theme either way."
       }
     ]
   },
