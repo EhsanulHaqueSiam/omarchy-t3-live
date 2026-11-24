@@ -15,9 +15,9 @@
 #     "projectColor" the project's T3 icon color name ("gray", "blue", ...)
 #     "since",      when the run (or the pending request) started
 #     "ended"}]}    when the run ended. Done threads stay listed for 2 minutes;
-#                   failed ones for 12 hours and limited ones until their limit
-#                   resets (at least 12 hours), until settled or resumed, and
-#                   not while T3 has them snoozed
+#                   failed ones for 12 hours, limited ones until 12 hours past
+#                   their reset (so a resume planned for the reset still fires),
+#                   until settled or resumed, and not while T3 snoozes them
 # Run it locally with `sh feed.sh`, or on another machine with
 # `ssh <host> sh -s < feed.sh`. Pass `once` to print the current state and exit.
 # It only reads T3's database, opened read-only.
@@ -43,10 +43,10 @@ WITH live AS (
                      WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
     AND ((r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds'))
       OR (r.status = 'failed' AND (r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')
-        -- A usage limit stays until it resets, so a resume planned for then survives.
+        -- A usage limit stays until 12 hours past its reset, so a resume planned for then fires.
         OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items i
           WHERE i.thread_id = r.thread_id AND i.run_id = r.run_id AND i.type = 'error' AND i.status = 'failed'
-            AND json_extract(i.payload_json, '\$.failure.resetAt') > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))))
+            AND json_extract(i.payload_json, '\$.failure.resetAt') > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')))))
     AND r.thread_id NOT IN (SELECT thread_id FROM live)
 ), act AS (
   SELECT thread_id, since, NULL AS ended, NULL AS outcome, running, NULL AS run_id FROM live

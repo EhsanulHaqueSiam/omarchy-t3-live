@@ -8,10 +8,11 @@ import "Model.js" as Model
 
 // A compact island for T3 Code threads, worded like T3's mobile live
 // notification: "T3 Working" for one thread, "T3 3 live" for several,
-// "T3 3·1·1" (live, questions, approvals, stopped in the theme's colors) for
-// a mix, and "T3 Done" for a few seconds when one finishes. Clicking it drops
+// "T3 3·1·1" (live, questions, approvals, stopped, each in its color) for a
+// mix, and "T3 Done" for a few seconds when one finishes. Clicking it drops
 // down one row per thread, with only the buttons that thread's state needs.
-// Every color comes from the current Omarchy theme.
+// Surfaces follow the Omarchy theme; phases use T3's vivid colors (or the
+// theme's, by the "Colors" setting).
 // The threads come from Service.qml, which every monitor's widget shares.
 BarWidget {
   id: root
@@ -76,6 +77,7 @@ BarWidget {
   Binding { target: root.service; when: !!root.service; property: "hostsText"; value: String(root.setting("sshHosts", "")); restoreMode: Binding.RestoreNone }
   Binding { target: root.service; when: !!root.service; property: "notify"; value: root.setting("notify", true) === true; restoreMode: Binding.RestoreNone }
   Binding { target: root.service; when: !!root.service; property: "hostsReady"; value: true; restoreMode: Binding.RestoreNone }
+  Binding { target: root.service; when: !!root.service; property: "linked"; value: root.setting("linked", true) === true; restoreMode: Binding.RestoreNone }
   Binding { target: root.service; when: !!root.service; property: "colors"; value: root.setting("colors", "T3") === "Theme" ? "theme" : "t3"; restoreMode: Binding.RestoreNone }
 
   Connections {
@@ -271,12 +273,29 @@ BarWidget {
     owner: root
     open: root.popupOpen
     contentWidth: popup.fittedContentWidth(Style.space(348))
-    contentHeight: popup.fittedContentHeight(list.contentHeight)
+    // A long list scrolls inside a card about eight rows tall.
+    contentHeight: popup.fittedContentHeight(Math.min(list.contentHeight, Style.space(560)))
 
     // Rows come in once per opening, a few at a time; they reset unseen
     // after the card has faded out.
     readonly property bool revealed: root.popupOpen || popup.visible
     readonly property color surface: Commons.Color.popups.background
+
+    // A soft edge over the last visible row says there is more below.
+    Rectangle {
+      z: 2
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      height: Style.space(28)
+      visible: list.contentHeight > list.height + 1
+      opacity: list.atYEnd ? 0 : 1
+      Behavior on opacity { NumberAnimation { duration: Style.duration(160) } }
+      gradient: Gradient {
+        GradientStop { position: 0; color: "transparent" }
+        GradientStop { position: 1; color: popup.surface }
+      }
+    }
 
     ListView {
       id: list
@@ -286,7 +305,10 @@ BarWidget {
       interactive: contentHeight > height
       boundsBehavior: Flickable.StopAtBounds
 
+      // Only while the card is shown: rows that arrive while it is closed must
+      // still come in with the opening stagger.
       add: Transition {
+        enabled: popup.revealed
         NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
         NumberAnimation { property: "scale"; from: 0.97; to: 1; duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
       }
@@ -294,6 +316,7 @@ BarWidget {
         NumberAnimation { property: "opacity"; to: 0; duration: Style.duration(120); easing.type: Easing.OutCubic }
       }
       displaced: Transition {
+        enabled: popup.revealed
         NumberAnimation { property: "y"; duration: Style.duration(200); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
         NumberAnimation { property: "opacity"; to: 1; duration: Style.duration(120) }
       }
@@ -306,7 +329,7 @@ BarWidget {
       header: Row {
         readonly property var awake: root.service ? root.service.awakeThreads : []
         readonly property var head: Model.summary(awake, root.service ? root.service.snoozedCount : 0)
-        readonly property int activeTotal: awake.filter(function(t) { return !Model.finished(t) }).length
+        readonly property int activeTotal: awake.filter(function(t) { return Model.live(t) || Model.asking(t) }).length
         x: Style.space(6)
         spacing: Style.space(8)
         bottomPadding: Style.space(6)
@@ -383,12 +406,14 @@ BarWidget {
         // theme color: [glyph, text, color].
         readonly property var metaParts: {
           var parts = []
-          if (t.project) parts.push(["󰉋", t.project, root.onSurface(Model.projectColor(t.projectColor, root.pal), popup.surface)])
-          parts.push([t.host === "" ? "󰌢" : "󰒋", t.host === "" ? strings.t("thisMachine") : t.host, root.onSurface(root.pal.cyan, popup.surface)])
+          // Small text: lifted to 4.5:1 and drawn at full strength.
+          var small = function(hex) { return Model.readable(hex, String(popup.surface), root.pal.fg, 4.5) }
+          if (t.project) parts.push(["󰉋", t.project, small(Model.projectColor(t.projectColor, root.pal))])
+          parts.push([t.host === "" ? "󰌢" : "󰒋", t.host === "" ? strings.t("thisMachine") : t.host, small(root.pal.cyan)])
           var pr = Model.prLook(t.pr, root.pal)
-          if (pr) parts.push([pr[0], "#" + t.pr.n, root.onSurface(pr[1], popup.surface)])
+          if (pr) parts.push([pr[0], "#" + t.pr.n, small(pr[1])])
           // Octicons issue-opened.
-          if (t.issue) parts.push(["\uf41b", t.issue, root.onSurface(root.pal.green, popup.surface)])
+          if (t.issue) parts.push(["\uf41b", t.issue, small(root.pal.green)])
           return parts
         }
 
@@ -456,7 +481,6 @@ BarWidget {
             textFormat: Text.PlainText
             text: Model.glyph(row.kind)
             color: row.tint
-            opacity: row.kind === "stale" ? 0.7 : 1
             font.family: root.barFont
             font.pixelSize: Style.font.body
             Behavior on color { ColorAnimation { duration: Style.duration(200) } }
@@ -519,12 +543,12 @@ BarWidget {
                     anchors.verticalCenter: parent.verticalCenter
                   }
                   Text {
-                    width: index === 0 ? Math.min(implicitWidth, metaLine.width - Style.space(14)) : implicitWidth
+                    // The project gives way first, so the machine and PR stay in view.
+                    width: index === 0 ? Math.min(implicitWidth, metaLine.width * 0.4) : implicitWidth
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
                     text: modelData[1]
                     color: modelData[2]
-                    opacity: 0.85
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
                     anchors.verticalCenter: parent.verticalCenter

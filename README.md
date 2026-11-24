@@ -8,6 +8,15 @@ It speaks the language of T3 Code's own mobile live notification: one word when 
 
 <p align="center"><img src="docs/list.gif" alt="The list: an approval with Approve, a question with Answer, a failed thread with Resume and Dismiss, working threads with their current step, and a snoozed usage limit with Wake" width="420"></p>
 
+## Philosophy
+
+- **A glance, not a dashboard.** The bar says one thing: what your agents are doing, in one word or a few colored numbers. Nothing loops or blinks; it moves only when something changes, and it disappears when nothing needs you.
+- **Choose, then go.** The list is for deciding where to go next: one row per thread, one line of what is happening now, and only the buttons that state needs.
+- **Decisions happen where the context is.** Answering a question, approving a command or settling a thread needs the whole thread, so those open it in T3 Code. The list only does what needs no context: resume, wait for a limit, snooze, dismiss.
+- **Mirror T3, don't fork it.** Its words, its colors, its resume message. It reads T3's state and never writes it; the only thing it keeps is a small plan file whose entries end on their own.
+- **Fit Omarchy.** Theme surfaces, Omarchy's motion rules (short, ease-out, no bounce, off when animations are off) and plain-text safety for anything that comes from another machine.
+- **Left out on purpose:** answering inline, a message box, history, usage meters (Omarchy's Agents widget has those), and settings beyond the three you might actually change.
+
 ## Install
 
 ```sh
@@ -15,6 +24,13 @@ omarchy plugin add https://github.com/EhsanulHaqueSiam/omarchy-t3-live.git --ena
 ```
 
 It needs T3 Code on the same machine, in `~/.t3` (or `T3CODE_HOME`). `sqlite3` and `jq` come with Omarchy. Resume uses T3's own `t3` command, which T3 installs.
+
+To remove it:
+
+```sh
+omarchy plugin remove siam.t3-live
+rm -rf ~/.local/state/omarchy-t3-live   # its plan file, if you want it gone too
+```
 
 ## The island
 
@@ -43,13 +59,13 @@ One row per thread: the title, one line of what is happening now, and a line wit
 | Failed | The error | **Resume**, **Dismiss** |
 | Usage limit | `Resets 4:00 PM` | **On reset** (resume when it resets), **Snooze** (hide until then) |
 | Usage limit, resume planned | `Resumes 4:00 PM` | **Cancel**, **Snooze** |
-| Usage limit, T3 will resume it | `Resumes 4:00 PM` | **Snooze** |
+| Usage limit, T3 will resume it | `Resumes 4:00 PM` | **Snooze** (none once it has reset) |
 | Usage limit, reset | `Limit reset` | **Resume**, **Dismiss** |
 | Snoozed | `Snoozed until 4:00 PM`, dimmed, at the end | **Wake** (only for snoozes made here) |
 | Out of date | `Waiting for an update`: its machine stopped answering | none |
 | Done | `Finished in 12:04`, for 2 minutes | none |
 
-Clicking a row opens its thread in T3. A long list scrolls.
+Clicking a row opens its thread in T3. A long list scrolls inside a card about eight rows tall.
 
 <p align="center"><img src="docs/all-states.png" alt="Every state in one list" width="320"></p>
 
@@ -74,9 +90,11 @@ Rows move rather than jump: a thread that starts waiting on you glides to the to
 
 A toast arrives when a thread starts waiting on you, finishes, fails or hits a usage limit. Clicking a toast opens the thread; its buttons offer Resume, Resume at reset or Snooze where they apply. A question or approval still waiting after 5 minutes gets one more, critical toast. Turn toasts off with the widget's **Notifications** setting (`"notify": false` in its bar entry).
 
-## Other machines
+## Linked machines
 
-Add other machines running T3 Code as ssh hosts in the widget's **Other machines** setting, or in its bar entry in `~/.config/omarchy/shell.json`:
+Threads from T3 Code's linked environments show up on their own: the plugin asks T3 which environments are linked (`t3 environment list`), matches each one's address to an ssh alias in `~/.ssh/config` (or uses the address itself), and reads that machine's threads over key-based ssh. Turn this off with the widget's **Linked machines** setting. T3 itself doesn't let other programs read a linked environment, so a machine you can't ssh into isn't shown.
+
+To add a machine by hand, put its ssh host in the widget's **Other machines** setting, or in its bar entry in `~/.config/omarchy/shell.json`:
 
 ```json
 { "id": "siam.t3-live", "sshHosts": "mac, server" }

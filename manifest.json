@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "siam.t3-live",
   "name": "T3 Live",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "author": "EhsanulHaqueSiam",
   "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or permission, and what just finished, with toasts. Covers this machine and any ssh hosts.",
   "kinds": [
@@ -22,7 +22,8 @@
     "defaults": {
       "sshHosts": "",
       "notify": true,
-      "colors": "T3"
+      "colors": "T3",
+      "linked": true
     },
     "schema": [
       {
@@ -31,6 +32,13 @@
         "label": "Other machines",
         "defaultValue": "",
         "description": "Other machines running T3 Code, as ssh hosts separated by commas (e.g. mac, server). Each needs key-based ssh and sqlite3."
+      },
+      {
+        "key": "linked",
+        "type": "boolean",
+        "label": "Linked machines",
+        "defaultValue": true,
+        "description": "Also show threads from T3 Code's linked environments that this machine can reach over key-based ssh."
       },
       {
         "key": "notify",

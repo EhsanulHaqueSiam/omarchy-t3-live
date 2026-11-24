@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed dismissed actions tooltip readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -144,7 +144,8 @@ assert.equal(M.inkOn("#fcd34d"), "#000000")
 assert.equal(M.inkOn("#4f46e5"), "#ffffff")
 assert.equal(M.phaseColor("input", pal), pal.magenta)
 assert.equal(M.phaseColor("limited", pal), pal.red)
-assert.equal(M.projectColor("indigo", pal), pal.blue)
+assert.equal(M.projectColor("indigo", pal), pal.magenta)
+assert.equal(M.projectColor("sky", pal), pal.blue)
 assert.equal(M.projectColor("gray", pal), pal.muted)
 assert.deepEqual(M.prLook({ state: "merged" }, pal), ["\uf419", pal.magenta])
 assert.deepEqual(M.prLook({ state: "open", checks: "failure" }, pal), ["\uf407", pal.red])
@@ -154,6 +155,12 @@ assert.equal(M.prLook(null, pal), null)
 assert.equal(M.t3Palette(false).yellow, "#fcd34d")
 assert.equal(M.t3Palette(true).magenta, "#4f46e5")
 assert.ok(M.luminance("#ffffff") > 0.9 && M.luminance("#101315") < 0.1)
+
+// Small text reaches 4.5:1; Qt's translucent "#aarrggbb" still counts.
+assert.ok(M.contrast(M.readable("#584e51", "#101315", "#e0e0e0", 4.5), "#101315") >= 4.5)
+assert.ok(M.contrast(M.readable(pal.yellow, "#cc101315", pal.fg), pal.bg) >= 3)
+// Toast text can't turn into markup, however many times it is decoded.
+assert.equal(M.toastText("<b>x</b> &amp;"), "\u2039b\u203ax\u2039/b\u203a &amp;")
 
 // New fields from another machine are checked too.
 const extra = M.parseLine(JSON.stringify({ env, threads: [{ id, state: "working", title: "x", projectColor: "Blue; rm", issue: "#40471" }, { id: id2, state: "working", title: "y", projectColor: "indigo", issue: "<b>1</b>" }] })).threads
@@ -181,11 +188,6 @@ assert.deepEqual(M.summary([t("a", "working", 1), t("b", "starting", 1)]), ["sum
 assert.deepEqual(M.summary([t("b", "failed", 1, 2), t("c", "done", 1, 2)]), ["summary.finishedStopped", 1])
 assert.deepEqual(M.summary([t("c", "done", 1, 2)]), ["summary.allFinished", 0])
 
-// T3's phase colors, dark and light; stale has none.
-assert.equal(M.tint("working", false), "#7dd3fc")
-assert.equal(M.tint("input", true), "#4f46e5")
-assert.equal(M.tint("perm", false), "#fcd34d")
-assert.equal(M.tint("stale", false), "")
 
 // Transitions: a host's next snapshot toasts what newly waits or finishes, once.
 const before = [t("a", "working", 1), t("b", "input", 2)]

@@ -24,7 +24,19 @@ Item {
   // "t3": T3's own vivid phase colors (the default); "theme": the Omarchy
   // theme's palette. Surfaces, text and borders follow the theme either way.
   property string colors: "t3"
-  readonly property var hosts: [""].concat(Model.parseHosts(hostsText))
+  // Linked T3 environments this machine can ssh into, found by discover.sh
+  // (on by default; the widget's "Linked machines" setting).
+  property bool linked: true
+  // Plans are pruned only once discovery has said which machines are linked.
+  property bool discovered: false
+  property string linkedText: ""
+  readonly property var hosts: {
+    var out = [""]
+    Model.parseHosts(hostsText).concat(linked ? Model.parseHosts(linkedText) : []).forEach(function(h) {
+      if (out.indexOf(h) === -1) out.push(h)
+    })
+    return out
+  }
 
   // host ("" for this machine) -> { env, threads } from that machine's feed.
   property var sources: ({})
@@ -166,7 +178,8 @@ Item {
       if (parts[0] !== host) return
       // A thread missing from a full snapshot may only be past the row cap.
       if (!t) { if (list.length < 50) { delete plan[key]; changed = true } return }
-      var limitHolds = !(e.resume || e.snooze) || (t.state === "limited" && t.failure && t.failure.resetAt === e.resetAt)
+      // A plan belongs to one stop: the same reset and the same end time.
+      var limitHolds = !(e.resume || e.snooze) || (t.state === "limited" && t.failure && t.failure.resetAt === e.resetAt && (!e.ended || t.ended === e.ended))
       var dismissalHolds = !e.dismissed || t.ended === e.dismissed
       if (!Model.stopped(t) || !limitHolds || !dismissalHolds) { delete plan[key]; changed = true }
     })
@@ -216,7 +229,9 @@ Item {
     // One send per stop: a second click, or a toast and the row, must not
     // queue a second turn (T3's CLI queues a message on a busy thread), and
     // a limit T3 resumes itself is left to T3.
-    if (root.resuming[key] || !Model.stopped(t) || (t.recovery && t.recovery.autoResume)) return
+    // Also once per stop across the queue and the send in flight.
+    var queued = root.jobs.concat(root.job ? [root.job] : []).some(function(j) { return j.key === key && j.ended === t.ended })
+    if (queued || root.resuming[key] || !Model.stopped(t) || (t.recovery && t.recovery.autoResume)) return
     // 60 s at most, so one hung send can't hold up every later resume.
     var argv = t.host === ""
       ? ["bash", "-lc", 'exec "$@"', "bash", "timeout", "60", "t3", "thread", "send", t.id, root.resumeMessage]
@@ -225,8 +240,6 @@ Item {
     var resuming = Object.assign({}, root.resuming)
     resuming[key] = Date.now()
     root.resuming = resuming
-    var plan = Object.assign({}, root.plan)
-    if (plan[key]) { delete plan[key]; setPlan(plan) }
     root.jobs = root.jobs.concat([{ argv: argv, key: key, title: t.title, env: t.env, id: t.id, ended: t.ended }])
     pump()
   }
@@ -235,7 +248,7 @@ Item {
     if (field !== "dismissed" && (t.state !== "limited" || !t.failure)) return
     if (field === "dismissed" && !Model.stopped(t)) return
     var key = planKey(t), plan = Object.assign({}, root.plan)
-    var entry = Object.assign({ resetAt: t.failure ? t.failure.resetAt : 0, resume: false, snooze: false, dismissed: 0 }, plan[key])
+    var entry = Object.assign({ resetAt: t.failure ? t.failure.resetAt : 0, ended: t.ended, resume: false, snooze: false, dismissed: 0 }, plan[key])
     entry[field] = value
     if (!entry.resume && !entry.snooze && !entry.dismissed) delete plan[key]
     else plan[key] = entry
@@ -260,7 +273,8 @@ Item {
   // plan loads, and a plan for "mac" must not be dropped before they do.
   onHostsChanged: pruneTimer.restart()
   onHostsReadyChanged: pruneTimer.restart()
-  Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded && root.hostsReady) root.pruneHosts() }
+  onDiscoveredChanged: pruneTimer.restart()
+  Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded && root.hostsReady && (root.discovered || !root.linked)) root.pruneHosts() }
   property bool planLoaded: false
 
   function setPlan(plan) {
@@ -277,7 +291,8 @@ Item {
     Object.keys(data).slice(0, 100).forEach(function(key) {
       var v = data[key]
       if (!/^[A-Za-z0-9_.@-]*\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
-      plan[key] = { resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, resume: v.resume === true, snooze: v.snooze === true,
+      plan[key] = { resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, ended: typeof v.ended === "number" ? v.ended : 0,
+        resume: v.resume === true, snooze: v.snooze === true,
         dismissed: typeof v.dismissed === "number" ? v.dismissed : 0 }
     })
     root.plan = plan
@@ -313,6 +328,12 @@ Item {
         continue
       }
       root.job = job
+      // The 60 s "Resuming" window starts when the send goes out, and a plan
+      // for this stop is used up only now.
+      var marks = Object.assign({}, root.resuming)
+      marks[job.key] = Date.now()
+      root.resuming = marks
+      if (root.plan[job.key]) { var plan = Object.assign({}, root.plan); delete plan[job.key]; setPlan(plan) }
       resumer.command = job.argv
       resumer.running = true
     }
@@ -329,7 +350,7 @@ Item {
         root.resuming = resuming
         if (root.notify)
           Util.execArgv(["omarchy-notification-send", "--app-name", "T3 Live", "-u", "normal", "-g", "󰀨",
-            Model.safeArg(strings.t("toast.resumeFailed").arg(job.title)), "--action", strings.t("open"), "sh", root.openPath, job.env, job.id])
+            Model.safeArg(Model.toastText(strings.t("toast.resumeFailed").arg(job.title))), "--action", strings.t("open"), "sh", root.openPath, job.env, job.id])
       }
       root.pump()
     }
@@ -381,7 +402,7 @@ Item {
         var phase = Model.limitPhase(t, Date.now(), undefined)
         var reset = t.failure ? t.failure.resetAt : 0
         toast = ["normal", "󰔟", "toast.limited",
-          phase === "t3" ? strings.t("resumesAt").arg(clock(reset)) : phase === "reset" ? strings.t("limitReset") : strings.t("resetsAt").arg(clock(reset)),
+          phase === "t3" || phase === "t3reset" ? strings.t("resumesAt").arg(clock(reset)) : phase === "reset" ? strings.t("limitReset") : strings.t("resetsAt").arg(clock(reset)),
           phase === "wait" ? open.concat(ipc("resumeAtReset", "resumeAtReset"), ipc("snooze", "snooze"))
             : phase === "reset" ? open.concat(ipc("resume", "resume")) : open]
         break
@@ -389,7 +410,7 @@ Item {
     }
     Util.execArgv(["omarchy-notification-send", "--app-name", "T3 Live",
       "-u", still ? "critical" : toast[0], "-g", toast[1],
-      Model.safeArg(strings.t(toast[2]).arg(t.title)), Model.safeArg(Model.escapeMarkup(toast[3]))].concat(toast[4]))
+      Model.safeArg(Model.toastText(strings.t(toast[2]).arg(t.title))), Model.safeArg(Model.toastText(toast[3]))].concat(toast[4]))
   }
 
   function permLine(t) {
@@ -457,8 +478,8 @@ Item {
   }
 
   // `omarchy-shell siam.t3-live toggle` opens the list, e.g. from a keybinding.
-  // resume / resumeAtReset / snooze take an environment id and thread id; toast
-  // buttons call them.
+  // resume / resumeAtReset / snooze take an environment id, a thread id and the
+  // stop's end time; toast buttons call them, and only that stop is acted on.
   ShellIpc {
     target: "siam.t3-live"
     function toggle(): void { root.toggleRequested() }
@@ -475,6 +496,25 @@ Item {
   function withThread(env, id, stop, action) {
     var t = root.allThreads.filter(function(x) { return x.env === env && x.id === id })[0]
     if (t && Model.stopped(t) && String(t.ended) === stop) action(t)
+  }
+
+  // Linked environments, found at start and every 10 minutes.
+  Process {
+    id: discover
+    command: ["sh", root.localPath("discover.sh")]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        root.linkedText = Model.parseHosts(text.split("\n").join(",")).join(",")
+        root.discovered = true
+      }
+    }
+  }
+  Timer {
+    interval: 600000
+    repeat: true
+    running: root.linked
+    triggeredOnStart: true
+    onTriggered: if (!discover.running) discover.running = true
   }
 
   Instantiator {

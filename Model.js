@@ -84,8 +84,8 @@ function rank(t) {
 //   "t3"     T3 itself resumes it at the reset (its own auto-resume is armed)
 //   "armed"  the plugin resumes it at the reset
 //   "wait"   nothing planned yet
-//   "t3", "t3reset" T3 itself resumes it at the reset (its own auto-resume
-//                   is armed), before and after: the plugin never sends then
+//   "t3" / "t3reset" T3 itself resumes it at the reset (its own auto-resume
+//                    is armed), before / after the reset: the plugin never sends
 function limitPhase(t, now, plan) {
   var reset = t.failure ? t.failure.resetAt : 0
   var due = !reset || now >= reset
@@ -188,13 +188,14 @@ function summary(threads, snoozedCount) {
   return ["summary.allFinished", 0]
 }
 
-// ---- Theme colors ----
-// The Omarchy theme's palette ({ red, green, yellow, blue, magenta, cyan,
-// muted, fg, bg } as "#rrggbb"), read from its colors.toml, decides every
-// color, so the plugin changes with the theme like the rest of Omarchy.
+// ---- Colors ----
+// A palette is { red, green, yellow, blue, magenta, cyan, muted, fg, bg } as
+// "#rrggbb". Surfaces (fg, bg, muted) always come from the Omarchy theme; the
+// phase colors are T3's vivid ones (t3Palette) or the theme's, by setting.
 
+// "#rrggbb", or Qt's "#aarrggbb" for a translucent color.
 function rgb(hex) {
-  var m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""))
+  var m = /^#?(?:[0-9a-f]{2})?([0-9a-f]{6})$/i.exec(String(hex || ""))
   if (!m) return null
   var n = parseInt(m[1], 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
@@ -212,16 +213,23 @@ function contrast(a, b) {
   var x = luminance(a), y = luminance(b)
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
 }
-// A theme color too close to its background is mixed toward the theme's
-// text color until it reads (3:1, enough for bold UI text and glyphs).
-function readable(hex, bg, fg) {
+// A color too close to its background is mixed toward the theme's text color
+// until it reads: 3:1 by default (bold UI text, glyphs), 4.5:1 for small text.
+function readable(hex, bg, fg, target) {
   if (!rgb(hex) || !rgb(bg) || !rgb(fg)) return hex
-  var a = rgb(hex), f = rgb(fg)
+  var a = rgb(hex), f = rgb(fg), need = target || 3
   for (var i = 0; i <= 10; i++) {
     var c = hexOf(a.map(function(v, k) { return v + (f[k] - v) * i / 10 }))
-    if (contrast(c, bg) >= 3) return c
+    if (contrast(c, bg) >= need) return c
   }
   return fg
+}
+
+// Toast text shows as typed: Omarchy's notifications decode entities more
+// than once before rendering their few allowed tags, so escaping alone can't
+// keep "<b>" literal. Angle brackets become look-alikes instead.
+function toastText(text) {
+  return String(text || "").replace(/</g, "\u2039").replace(/>/g, "\u203a")
 }
 // Black or white, whichever reads better on a filled button.
 function inkOn(fill) {
@@ -247,8 +255,8 @@ function t3Palette(light) {
 function projectColor(name, pal) {
   var slot = {
     red: "red", rose: "red", pink: "red", orange: "yellow", amber: "yellow", yellow: "yellow",
-    lime: "green", green: "green", emerald: "green", teal: "cyan", cyan: "cyan", sky: "cyan",
-    blue: "blue", indigo: "blue", violet: "magenta", purple: "magenta", fuchsia: "magenta"
+    lime: "green", green: "green", emerald: "green", teal: "cyan", cyan: "cyan", sky: "blue",
+    blue: "blue", indigo: "magenta", violet: "magenta", purple: "magenta", fuchsia: "magenta"
   }[name]
   return slot ? pal[slot] : pal.muted
 }
@@ -264,16 +272,6 @@ function prLook(pr, pal) {
   return ["\uf407", pal.green]
 }
 
-// T3's phase colors (web pills, iOS and Android live notifications):
-// Tailwind 300 stops on dark surfaces, 600 on light. Stale has none.
-function tint(phase, light) {
-  var t = {
-    starting: ["#7dd3fc", "#0284c7"], working: ["#7dd3fc", "#0284c7"],
-    perm: ["#fcd34d", "#d97706"], input: ["#a5b4fc", "#4f46e5"],
-    failed: ["#fca5a5", "#dc2626"], limited: ["#fca5a5", "#dc2626"], done: ["#6ee7b7", "#059669"]
-  }[phase]
-  return t ? t[light ? 1 : 0] : ""
-}
 
 // A stopped thread the user dismissed stays out of sight until it stops
 // again (a new run ends at a new time).
