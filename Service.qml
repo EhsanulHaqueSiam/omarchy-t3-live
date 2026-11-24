@@ -137,6 +137,24 @@ Item {
   property var escalated: ({})
   // host -> when its feed dropped; its threads show as stale for 10 minutes.
   property var staleSince: ({})
+  // Waits that ended with their thread gone, announced by finishTimer.
+  // shortcut: archiving or deleting a waiting thread in T3 also reads as
+  // finished, and so does an interrupted turn whose wait ends; the feed can't
+  // tell those apart without reading archived threads.
+  property var finishing: []
+  Timer {
+    id: finishTimer
+    interval: 5000
+    onTriggered: {
+      var due = root.finishing
+      root.finishing = []
+      due.forEach(function(f) {
+        var s = root.sources[f.host]
+        if (!s || f.host in root.staleSince || s.threads.some(function(x) { return x.id === f.t.id })) return
+        root.announce(Object.assign({}, f.t, { env: f.env, host: f.host }), false)
+      })
+    }
+  }
   // host -> its latest snapshot, while another host shows the same machine.
   property var shadow: ({})
 
@@ -174,7 +192,12 @@ Item {
     delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
-    if (!first && root.sources[host]) events = events.concat(Model.finishedWaits(root.sources[host].threads, parsed.threads, Date.now()))
+    // A finished wait is announced only if the thread is still gone a few
+    // seconds later: a wake run can land a poll after the wait closes.
+    if (!first && root.sources[host]) Model.finishedWaits(root.sources[host].threads, parsed.threads, Date.now()).forEach(function(t) {
+      root.finishing = root.finishing.concat([{ host: host, env: parsed.env, t: t }])
+      finishTimer.restart()
+    })
     root.seen[host] = Model.keys(parsed.threads)
     setSource(host, parsed)
     tidy(parsed.env, host, parsed.threads)

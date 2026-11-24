@@ -431,7 +431,8 @@ BarWidget {
           if (t.project) parts.push(["󰉋", t.project, small(Model.projectColor(t.projectColor, root.pal))])
           parts.push([t.host === "" ? "󰌢" : "󰒋", t.host === "" ? strings.t("thisMachine") : t.host, small(root.pal.cyan), "machine"])
           var pr = Model.prLook(t.pr, root.pal)
-          if (pr) parts.push([pr[0], "#" + t.pr.n, small(pr[1])])
+          // A waiting row already says "Watching PR #n".
+          if (pr && !(t.step && t.step.type === "watch_pr" && t.step.detail === String(t.pr.n))) parts.push([pr[0], "#" + t.pr.n, small(pr[1])])
           // Octicons issue-opened.
           if (t.issue) parts.push(["\uf41b", t.issue, small(root.pal.green)])
           return parts

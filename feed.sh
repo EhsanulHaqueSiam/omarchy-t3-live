@@ -48,11 +48,12 @@ WITH live AS (
     AND i.type IN ('command_execution', 'dynamic_tool', 'subagent', 'file_change', 'file_search', 'web_search', 'compaction')
     AND NOT (i.type = 'subagent' AND json_extract(i.payload_json, '\$.origin') = 'app_owned')
   GROUP BY i.thread_id
-  -- T3's own tool, under the server names T3 answers to (shortcut: the looser
-  -- ACP prefixes T3 also parses are not matched; none appear in practice).
+  -- T3's own tool, under T3's server names as written (shortcut: T3 also
+  -- accepts other casings of the server name and looser ACP prefixes; only
+  -- mcp__t3-code__ appears in practice, upgrade if T3 starts writing others).
   -- Every other item counts as 0, never NULL, so it always breaks the wait.
-  HAVING min(coalesce(i.type = 'dynamic_tool' AND (lower(json_extract(i.payload_json, '\$.toolName')) IN ('t3_thread_wait', 'mcp__t3-code__t3_thread_wait', 'mcp__t3_code__t3_thread_wait', 'mcp__t3code__t3_thread_wait', 'mcp__t3-code-direct__t3_thread_wait', 'mcp__t3_code_direct__t3_thread_wait', 't3-code.t3_thread_wait', 't3-code:t3_thread_wait', 't3-code/t3_thread_wait', 't3_code.t3_thread_wait', 't3_code:t3_thread_wait', 't3_code/t3_thread_wait', 't3code.t3_thread_wait', 't3code:t3_thread_wait', 't3code/t3_thread_wait', 't3-code-direct.t3_thread_wait', 't3-code-direct:t3_thread_wait', 't3-code-direct/t3_thread_wait', 't3_code_direct.t3_thread_wait', 't3_code_direct:t3_thread_wait', 't3_code_direct/t3_thread_wait')
-    OR (lower(json_extract(i.payload_json, '\$.toolName')) IN ('delegate_task', 'mcp__t3-code__delegate_task', 'mcp__t3_code__delegate_task', 'mcp__t3code__delegate_task', 'mcp__t3-code-direct__delegate_task', 'mcp__t3_code_direct__delegate_task', 't3-code.delegate_task', 't3-code:delegate_task', 't3-code/delegate_task', 't3_code.delegate_task', 't3_code:delegate_task', 't3_code/delegate_task', 't3code.delegate_task', 't3code:delegate_task', 't3code/delegate_task', 't3-code-direct.delegate_task', 't3-code-direct:delegate_task', 't3-code-direct/delegate_task', 't3_code_direct.delegate_task', 't3_code_direct:delegate_task', 't3_code_direct/delegate_task') AND json_extract(i.payload_json, '\$.input.mode') = 'wait')), 0)) = 1
+  HAVING min(coalesce(i.type = 'dynamic_tool' AND (json_extract(i.payload_json, '\$.toolName') IN ('t3_thread_wait', 'mcp__t3-code__t3_thread_wait', 'mcp__t3_code__t3_thread_wait', 'mcp__t3code__t3_thread_wait', 'mcp__t3-code-direct__t3_thread_wait', 'mcp__t3_code_direct__t3_thread_wait', 't3-code.t3_thread_wait', 't3-code:t3_thread_wait', 't3-code/t3_thread_wait', 't3_code.t3_thread_wait', 't3_code:t3_thread_wait', 't3_code/t3_thread_wait', 't3code.t3_thread_wait', 't3code:t3_thread_wait', 't3code/t3_thread_wait', 't3-code-direct.t3_thread_wait', 't3-code-direct:t3_thread_wait', 't3-code-direct/t3_thread_wait', 't3_code_direct.t3_thread_wait', 't3_code_direct:t3_thread_wait', 't3_code_direct/t3_thread_wait', 't3-code · t3_thread_wait', 't3_code · t3_thread_wait', 't3code · t3_thread_wait', 't3-code-direct · t3_thread_wait', 't3_code_direct · t3_thread_wait')
+    OR (json_extract(i.payload_json, '\$.toolName') IN ('delegate_task', 'mcp__t3-code__delegate_task', 'mcp__t3_code__delegate_task', 'mcp__t3code__delegate_task', 'mcp__t3-code-direct__delegate_task', 'mcp__t3_code_direct__delegate_task', 't3-code.delegate_task', 't3-code:delegate_task', 't3-code/delegate_task', 't3_code.delegate_task', 't3_code:delegate_task', 't3_code/delegate_task', 't3code.delegate_task', 't3code:delegate_task', 't3code/delegate_task', 't3-code-direct.delegate_task', 't3-code-direct:delegate_task', 't3-code-direct/delegate_task', 't3_code_direct.delegate_task', 't3_code_direct:delegate_task', 't3_code_direct/delegate_task', 't3-code · delegate_task', 't3_code · delegate_task', 't3code · delegate_task', 't3-code-direct · delegate_task', 't3_code_direct · delegate_task') AND json_extract(i.payload_json, '\$.input.mode') = 'wait')), 0)) = 1
 ), pend AS (
   -- T3's pending background work (derivePendingBackgroundWork), only what
   -- holds the thread's completion (backgroundWorkHoldsCompletion, which the
@@ -98,6 +99,8 @@ WITH live AS (
   FROM orchestration_v2_projection_threads t
   WHERE t.thread_id IN (SELECT thread_id FROM pend WHERE prio = 0)
     AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs o WHERE o.thread_id = t.thread_id AND o.status <> 'queued')
+    -- Its queued first run already shows it as starting.
+    AND t.thread_id NOT IN (SELECT thread_id FROM live)
 ), ended AS (
   -- Only a thread's latest run counts: a failure an earlier run had is history.
   SELECT r.run_id, r.thread_id, r.status, coalesce(json_extract(r.payload_json, '\$.startedAt'), r.requested_at) AS since,
