@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "siam.t3-live",
   "name": "T3 Live",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "EhsanulHaqueSiam",
-  "description": "Live T3 Code agent threads in the bar: how many are working, which ones wait on you, and their questions. Covers this machine and any ssh hosts.",
+  "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or permission, and what just finished, with toasts. Covers this machine and any ssh hosts.",
   "kinds": [
     "service",
     "bar-widget"
@@ -15,12 +15,13 @@
   },
   "barWidget": {
     "displayName": "T3 Live",
-    "description": "T3 3 live | 1 input. Click for each thread; threads waiting on you show their question and an Answer button.",
+    "description": "T3 3 live | 1 input | 1 perm, and T3 Done when one finishes. Click for each thread with its current step and PR; questions and permission requests have a button that opens the thread.",
     "category": "AI",
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "sshHosts": ""
+      "sshHosts": "",
+      "notify": true
     },
     "schema": [
       {
@@ -29,6 +30,13 @@
         "label": "Other machines",
         "defaultValue": "",
         "description": "Other machines running T3 Code, as ssh hosts separated by commas (e.g. mac, server). Each needs key-based ssh and sqlite3."
+      },
+      {
+        "key": "notify",
+        "type": "boolean",
+        "label": "Notifications",
+        "defaultValue": true,
+        "description": "Toast when a thread needs you or finishes, and once more if a question waits 5 minutes."
       }
     ]
   },

@@ -2,9 +2,20 @@
 
 An [Omarchy](https://omarchy.org) bar widget for [T3 Code](https://t3.codes) agents, styled after phone live updates.
 
-The bar shows a pill such as `T3  3 live │ 1 input`: three threads are working and one is waiting on you. It hides when nothing is running.
+The bar stays small: a pill such as `T3  3 live │ 1 input │ 1 perm` shows how many threads are working, how many have a question for you, and how many want permission. When a thread finishes, the pill says `T3  Done` (or `Failed`) for a few seconds. It hides when nothing is running.
 
-Click the pill for a list with one entry per thread. A working thread shows its title, project, machine and elapsed time. A thread waiting on you shows its question and an **Answer** button, which opens that thread in T3 Code. Clicking any other entry opens its thread too.
+Click the pill for a list with one entry per thread:
+
+- **Working**: what it is doing right now ("Editing Hero.tsx", "$ pnpm test"), its project and machine, its pull request ("#214 checks failing"), and how long it has run.
+- **Input**: the question it asks, and an **Answer** button that opens the thread in T3 Code.
+- **Perm**: what it wants to do ("Wants to run: pnpm test"), and a **Review** button that opens the thread.
+- **Done / failed**: how long it took; these stay listed for 2 minutes.
+
+Anything that needs a decision opens in T3 Code itself, where you have the full thread.
+
+## Notifications
+
+A toast arrives when a thread starts waiting on you or finishes, with a button that opens it. If a question or permission is still waiting after 5 minutes, one critical toast follows. Turn toasts off with the widget's **Notifications** setting (`"notify": false` in its bar entry).
 
 ## Install
 
@@ -40,7 +51,7 @@ bindd = SUPER ALT, T, T3 agents, exec, omarchy-shell siam.t3-live toggle
 
 `feed.sh` reads T3 Code's database read-only every 2 seconds and prints a line only when something changes. It runs once on this machine, and on each ssh host over one long-lived `ssh host sh -s` session, so nothing gets installed on those hosts. All bars share one set of feeds.
 
-A thread counts as live while it has a run in progress. It counts as waiting on you when it also has a pending request, such as a question. It never writes to T3's database or sends anything to T3.
+A thread counts as live while it has a run in progress. A pending question (or MCP elicitation, or sign-in) makes it **input**; a pending request to run a command, read or edit files makes it **perm**. It never writes to T3's database or sends anything to T3.
 
 ## Development
 
