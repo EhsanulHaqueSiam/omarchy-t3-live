@@ -327,7 +327,7 @@ Item {
     Object.keys(data).slice(0, 100).forEach(function(key) {
       var v = data[key]
       // Environment|thread, or host|thread from before plans followed the
-      // machine (tidy moves those on the host's first snapshot).
+      // machine (adoptLegacyPlans moves those when any route reports it).
       if (!/^[A-Za-z0-9_.@-]*\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
       plan[key] = { resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, ended: typeof v.ended === "number" ? v.ended : 0,
         resume: v.resume === true, snooze: v.snooze === true,

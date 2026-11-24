@@ -101,32 +101,39 @@ WITH live AS (
     AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs o WHERE o.thread_id = t.thread_id AND o.status <> 'queued')
     -- Its queued first run already shows it as starting.
     AND t.thread_id NOT IN (SELECT thread_id FROM live)
-), waitdone AS (
-  -- A wait that ended: a background item finished after the turn did (5 s
-  -- later, so the turn's own last writes don't count). Its thread is done for
-  -- 2 minutes from then, like any finish; an archived one never gets here.
-  -- Only items that could have held it (as in pend): no persistent tools, no
-  -- rolled-back runs.
+), waitend AS (
+  -- How each recent wait ended: the background items that finished after the
+  -- turn did (5 s later, so the turn's own last writes don't count), only
+  -- those that could have held it (as in pend: no persistent tools, no
+  -- rolled-back runs). "at" is when the last one ended, "ok" when the last
+  -- one completed or failed. An eligible item still running keeps the thread
+  -- in pend, so "at" is the moment the wait ended and stays put.
   -- shortcut: only turns that ended in the last 24 h are checked, which keeps
   -- each poll cheap; a longer wait ends without a Done. So does a wait that
   -- is released without a new turn (an awaited provider task or a PR watch
   -- that ends without waking the agent); T3 usually wakes it, and that turn
   -- brings the Done.
-  -- Work that was cancelled (a T3 restart, Stop) ended nothing: no Done. The
-  -- first finish after the turn is the Done's time, so a later one in the same
-  -- 2 minutes can't change its key and toast again.
-  SELECT r.thread_id, min(i.updated_at) AS at
+  SELECT r.thread_id, max(i.updated_at) AS at,
+         max(CASE WHEN i.status IN ('completed', 'failed') THEN i.updated_at END) AS ok
   FROM orchestration_v2_projection_runs r
   JOIN orchestration_v2_projection_turn_items i ON i.thread_id = r.thread_id
-    AND i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('completed', 'failed')
+    AND i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('completed', 'failed', 'cancelled', 'interrupted')
+    AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', r.completed_at, '+5 seconds')
     AND NOT (i.type = 'dynamic_tool' AND json_extract(i.payload_json, '\$.input.persistent') IS 1)
     AND coalesce((SELECT x.status FROM orchestration_v2_projection_runs x WHERE x.run_id = i.run_id), '') <> 'rolled_back'
-    AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
-    AND i.updated_at > strftime('%Y-%m-%dT%H:%M:%fZ', r.completed_at, '+5 seconds')
   WHERE r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-24 hours')
     AND r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
                      WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
   GROUP BY r.thread_id
+), waitdone AS (
+  -- A wait that ended with its work done: Done for 2 minutes from then, like
+  -- any finish (an archived thread never gets here). One wait, one time.
+  SELECT thread_id, at FROM waitend
+  WHERE at = ok AND at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
+), waitcancel AS (
+  -- A wait whose work was cancelled or interrupted last (a T3 restart, Stop)
+  -- ended nothing: no Done, not even from the turn's own recent finish.
+  SELECT thread_id FROM waitend WHERE ok IS NULL OR at > ok
 ), ended AS (
   -- Only a thread's latest run counts: a failure an earlier run had is history.
   SELECT r.run_id, r.thread_id, r.status, coalesce(json_extract(r.payload_json, '\$.startedAt'), r.requested_at) AS since,
@@ -142,6 +149,7 @@ WITH live AS (
           WHERE i.thread_id = r.thread_id AND i.run_id = r.run_id AND i.type = 'error' AND i.status = 'failed'
             AND json_extract(i.payload_json, '\$.failure.resetAt') > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')))))
     AND r.thread_id NOT IN (SELECT thread_id FROM live) AND r.thread_id NOT IN (SELECT thread_id FROM waits)
+    AND NOT (r.status = 'completed' AND r.thread_id IN (SELECT thread_id FROM waitcancel))
 ), act AS (
   SELECT thread_id, since, NULL AS ended, CASE WHEN thread_id IN (SELECT thread_id FROM blocked) THEN 'blocked' END AS outcome,
     running, NULL AS run_id FROM live

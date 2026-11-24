@@ -139,7 +139,8 @@ bindd = SUPER ALT, T, T3 agents, exec, omarchy-shell siam.t3-live toggle
 ## Development
 
 ```sh
-node tests/model.test.mjs
+node tests/model.test.mjs   # the model: parsing, states, colors, plans
+sh tests/feed.test.sh       # feed.sh against a fixture database: waiting, Done after a wait
 omarchy plugin validate .
 ```
 

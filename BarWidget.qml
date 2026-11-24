@@ -394,7 +394,9 @@ BarWidget {
         // A limit whose resume is already planned is handled, not an alarm.
         readonly property bool alert: (kind === "failed" || kind === "limited") && !resuming && !dimmed
           && !(kind === "limited" && root.service && ["t3", "t3reset", "armed"].indexOf(root.service.limitPhase(t)) !== -1)
-        readonly property bool wraps: kind === "input" || kind === "perm" || kind === "failed"
+        // A question or an error reads as prose over two lines; a command to
+        // approve stays on one, so it never breaks after a "--".
+        readonly property bool wraps: kind === "input" || kind === "failed"
         readonly property string detail: {
           switch (kind) {
             case "input": return t.question !== "" ? t.question : strings.t("heading.input")
