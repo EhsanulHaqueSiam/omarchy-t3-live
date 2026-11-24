@@ -2,13 +2,22 @@
 
 An [Omarchy](https://omarchy.org) bar widget for [T3 Code](https://t3.codes) agents, styled after phone live updates.
 
-The bar stays small: a pill such as `T3  3 live │ 1 input │ 1 perm` shows how many threads are working, how many have a question for you, and how many want permission. When a thread finishes, the pill says `T3  Done` (or `Failed`) for a few seconds. It hides when nothing is running.
+It speaks the same language as T3 Code's own mobile live notification: the same phases (starting, working, question, approval, waiting, done, failed), the same words and the same phase colors.
 
-Click the pill for a list with one entry per thread:
+The bar stays small:
 
-- **Working**: what it is doing right now ("Editing Hero.tsx", "$ pnpm test"), its project and machine, its pull request ("#214 checks failing"), and how long it has run.
-- **Input**: the question it asks, and an **Answer** button that opens the thread in T3 Code.
-- **Perm**: what it wants to do ("Wants to run: pnpm test"), and a **Review** button that opens the thread.
+- One thread says what it is doing: `T3  Working`, `T3  Answer`, `T3  Approve`, or `T3  Waiting` when its machine stopped answering.
+- Only working threads: `T3  3 live`.
+- A mix shows each count: `T3  3 live │ 1 input │ 1 perm`.
+- When a thread finishes, `T3  Done` (or `Failed`) for a few seconds.
+- Nothing running: the pill hides.
+
+Click the pill for the list, headed like the live notification ("2 need you · 6 active"), with one entry per thread:
+
+- **Working / starting**: what it is doing right now ("Editing Hero.tsx", "$ pnpm test"), its project and machine, its pull request ("#214 checks failing"), and how long it has run.
+- **Question**: what it asks, and an **Answer** button that opens the thread in T3 Code.
+- **Approval**: what it wants to do ("Wants to run: pnpm test"), and an **Approve** button that opens the thread.
+- **Waiting**: its machine stopped answering; it stays for 10 minutes or until the machine is back.
 - **Done / failed**: how long it took; these stay listed for 2 minutes.
 
 Anything that needs a decision opens in T3 Code itself, where you have the full thread.

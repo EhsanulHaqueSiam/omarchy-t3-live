@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip summary tint stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -35,18 +35,47 @@ assert.equal(fin.since, 0)
 assert.ok(fin.ended > 0)
 for (const bad of ["not json", "", JSON.stringify({ env: "../x", threads: [] })]) assert.equal(M.parseLine(bad), null)
 
-// Merge: waiting on you first (oldest first), then working (newest), then finished.
+// Merge in mobile's order: needs you (longest waiting first), failed, working
+// and starting (newest first), then done and stale.
 const t = (id, state, since, ended = 0) => ({ id, state, since, ended, title: id, step: null, pr: null })
 const merged = M.merge({
-  "": { env, threads: [t("work-old", "working", 1), t("done", "done", 1, 50)] },
-  mac: { env, threads: [t("perm", "perm", 9), t("work-new", "working", 5), t("input", "input", 3)] },
+  "": { env, threads: [t("work-old", "working", 1), t("done", "done", 1, 50), t("failed", "failed", 1, 40)] },
+  mac: { env, threads: [t("perm", "perm", 9), t("start", "starting", 5), t("input", "input", 3)] },
 })
-assert.deepEqual(merged.map(x => x.id + "@" + x.host), ["input@mac", "perm@mac", "work-new@mac", "work-old@", "done@"])
-assert.equal(M.count(merged, "working"), 2)
+assert.deepEqual(merged.map(x => x.id + "@" + x.host), ["input@mac", "perm@mac", "failed@", "start@mac", "work-old@", "done@"])
+assert.equal(M.count(merged, "working"), 1)
+
+// A dropped host: in-flight threads go stale, finished ones leave.
+assert.deepEqual(M.markStale([t("a", "working", 1), t("b", "input", 2), t("c", "done", 1, 2)]).map(x => x.id + ":" + x.state), ["a:stale", "b:stale"])
+
+// The bar chip follows mobile: one thread says its phase, only-working
+// threads say "N live" (9+), and a mix shows each count instead.
+const c = (live, input = 0, perm = 0, stale = 0) => ({ live, input, perm, stale })
+assert.deepEqual(M.chip(c(1)), ["working", "", "working"])
+assert.deepEqual(M.chip(c(0, 1)), ["answer", "", "input"])
+assert.deepEqual(M.chip(c(0, 0, 1)), ["approve", "", "perm"])
+assert.deepEqual(M.chip(c(0, 0, 0, 1)), ["waiting", "", "stale"])
+assert.deepEqual(M.chip(c(3)), ["liveCount", "3", "working"])
+assert.deepEqual(M.chip(c(12)), ["liveCount", "9+", "working"])
+assert.equal(M.chip(c(2, 1)), null)
+assert.equal(M.chip(c(0, 1, 1)), null)
+
+// The list's headline, mobile's summary.
+assert.deepEqual(M.summary([t("a", "input", 1), t("b", "perm", 1), t("c", "working", 1)]), ["summary.needYou", 2])
+assert.deepEqual(M.summary([t("a", "working", 1), t("b", "failed", 1, 2)]), ["summary.failed", 1])
+assert.deepEqual(M.summary([t("a", "working", 1), t("b", "starting", 1)]), ["summary.working", 2])
+assert.deepEqual(M.summary([t("b", "failed", 1, 2), t("c", "done", 1, 2)]), ["summary.finishedFailed", 1])
+assert.deepEqual(M.summary([t("c", "done", 1, 2)]), ["summary.allFinished", 0])
+
+// T3's phase colors, dark and light; stale has none.
+assert.equal(M.tint("working", false), "#7dd3fc")
+assert.equal(M.tint("input", true), "#4f46e5")
+assert.equal(M.tint("perm", false), "#fcd34d")
+assert.equal(M.tint("stale", false), "")
 
 // Transitions: a host's next snapshot toasts what newly waits or finishes, once.
 const before = [t("a", "working", 1), t("b", "input", 2)]
-const after = [t("a", "done", 1, 9), t("b", "input", 2), t("c", "perm", 3), t("d", "working", 4)]
+const after = [t("a", "done", 1, 9), t("b", "input", 2), t("c", "perm", 3), t("d", "working", 4), t("e", "stale", 1), t("f", "starting", 5)]
 assert.deepEqual(M.transitions(M.keys(before), after).map(x => x.id), ["a", "c"])
 assert.deepEqual(M.transitions(M.keys(after), after), [])
 // A second question on the same thread is a new state, so it toasts again.

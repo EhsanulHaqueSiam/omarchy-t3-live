@@ -2,7 +2,7 @@
 # Streams this machine's live T3 Code threads, one JSON line per change:
 #   {"env":"<environmentId>","threads":[{
 #     "id","title","project",
-#     "state",      working | input (a question) | perm (a permission) | done | failed
+#     "state",      starting | working | input (a question) | perm (an approval) | done | failed
 #     "askKind",    the pending request's kind, for input and perm
 #     "question",   what an input thread asks
 #     "step",       [type, detail] of a working thread's latest item
@@ -20,7 +20,8 @@ command -v sqlite3 >/dev/null || { echo "feed.sh: sqlite3 is not installed" >&2;
 
 sql="
 WITH live AS (
-  SELECT thread_id, min(coalesce(json_extract(payload_json, '\$.startedAt'), requested_at)) AS since
+  SELECT thread_id, min(coalesce(json_extract(payload_json, '\$.startedAt'), requested_at)) AS since,
+         max(status IN ('running', 'waiting')) AS running
   FROM orchestration_v2_projection_runs
   WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
   GROUP BY thread_id
@@ -34,9 +35,9 @@ WITH live AS (
     AND thread_id NOT IN (SELECT thread_id FROM live)
   GROUP BY thread_id
 ), act AS (
-  SELECT thread_id, since, NULL AS ended, NULL AS outcome FROM live
+  SELECT thread_id, since, NULL AS ended, NULL AS outcome, running FROM live
   UNION ALL
-  SELECT thread_id, since, ended, status FROM ended
+  SELECT thread_id, since, ended, status, 1 FROM ended
 ), ask AS (
   SELECT thread_id, runtime_request_id, kind, min(created_at) AS since
   FROM orchestration_v2_projection_runtime_requests
@@ -49,6 +50,7 @@ WITH live AS (
       WHEN x.outcome = 'failed' THEN 'failed'
       WHEN a.kind IN ('command', 'file-read', 'file-change', 'permission') THEN 'perm'
       WHEN a.thread_id IS NOT NULL THEN 'input'
+      WHEN x.running = 0 THEN 'starting'
       ELSE 'working'
     END AS state,
     coalesce(a.kind, '') AS askKind,

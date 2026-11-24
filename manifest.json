@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "siam.t3-live",
   "name": "T3 Live",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "EhsanulHaqueSiam",
   "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or permission, and what just finished, with toasts. Covers this machine and any ssh hosts.",
   "kinds": [
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "T3 Live",
-    "description": "T3 3 live | 1 input | 1 perm, and T3 Done when one finishes. Click for each thread with its current step and PR; questions and permission requests have a button that opens the thread.",
+    "description": "Worded like T3 mobile's live notification: T3 Working, T3 3 live, or T3 3 live | 1 input | 1 perm, and T3 Done when one finishes. Click for each thread; questions and approvals have a button that opens the thread.",
     "category": "AI",
     "allowMultiple": false,
     "defaultSection": "right",

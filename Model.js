@@ -5,8 +5,11 @@
 
 var UUID = /^[0-9a-fA-F-]{8,64}$/
 var HOST = /^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$/
-var STATES = ["working", "input", "perm", "done", "failed"]
+// The phases of T3's own mobile live notification, by our names:
+// starting, working (running), input, perm (approval), stale, done, failed.
+var STATES = ["starting", "working", "input", "perm", "stale", "done", "failed"]
 var ASKING = ["input", "perm"]
+var TOASTS = ["input", "perm", "done", "failed"]
 
 // "mac, box2" -> ["mac", "box2"]; drops names ssh could read as options.
 function parseHosts(text) {
@@ -55,9 +58,15 @@ function parseLine(line) {
 
 function asking(t) { return ASKING.indexOf(t.state) !== -1 }
 function finished(t) { return t.state === "done" || t.state === "failed" }
+function live(t) { return t.state === "working" || t.state === "starting" }
 
-// sources: { host: { env, threads } } -> one list: waiting on you first
-// (oldest first), then working (newest first), then just finished.
+// Mobile's order: needs you, failed, working, then done and stale.
+function rank(t) {
+  return asking(t) ? 0 : t.state === "failed" ? 1 : live(t) ? 2 : 3
+}
+
+// sources: { host: { env, threads } } -> one list in mobile's order; within
+// a group, the longest waiting question first, otherwise the newest.
 function merge(sources) {
   var all = []
   Object.keys(sources).forEach(function(host) {
@@ -67,7 +76,6 @@ function merge(sources) {
       all.push(Object.assign({}, t, { env: s.env, host: host }))
     })
   })
-  var rank = function(t) { return asking(t) ? 0 : finished(t) ? 2 : 1 }
   all.sort(function(a, b) {
     return (rank(a) - rank(b)) || (rank(a) === 0 ? a.since - b.since : (b.ended || b.since) - (a.ended || a.since))
   })
@@ -76,6 +84,50 @@ function merge(sources) {
 
 function count(threads, state) {
   return threads.filter(function(t) { return t.state === state }).length
+}
+
+// A host whose feed dropped: what was in flight is now out of date.
+function markStale(threads) {
+  return threads.filter(function(t) { return !finished(t) })
+    .map(function(t) { return Object.assign({}, t, { state: "stale" }) })
+}
+
+// counts: { live, input, perm, stale }. One thread, or only working ones,
+// gets mobile's one-word chip as [i18n key, argument, phase]; a mix gets null,
+// and the bar shows each count.
+function chip(c) {
+  var total = c.live + c.input + c.perm + c.stale
+  if (total === 1) {
+    if (c.live) return ["working", "", "working"]
+    if (c.input) return ["answer", "", "input"]
+    if (c.perm) return ["approve", "", "perm"]
+    return ["waiting", "", "stale"]
+  }
+  if (total > 1 && total === c.live) return ["liveCount", c.live > 9 ? "9+" : String(c.live), "working"]
+  return null
+}
+
+// The list's headline, mobile's summary: [i18n key, count].
+function summary(threads) {
+  var attention = threads.filter(asking).length
+  var failed = count(threads, "failed")
+  var active = threads.filter(function(t) { return !finished(t) }).length
+  if (attention > 0) return ["summary.needYou", attention]
+  if (active > 0 && failed > 0) return ["summary.failed", failed]
+  if (active > 0) return ["summary.working", active]
+  if (failed > 0) return ["summary.finishedFailed", failed]
+  return ["summary.allFinished", 0]
+}
+
+// T3's phase colors (web pills, iOS and Android live notifications):
+// Tailwind 300 stops on dark surfaces, 600 on light. Stale has none.
+function tint(phase, light) {
+  var t = {
+    starting: ["#7dd3fc", "#0284c7"], working: ["#7dd3fc", "#0284c7"],
+    perm: ["#fcd34d", "#d97706"], input: ["#a5b4fc", "#4f46e5"],
+    failed: ["#fca5a5", "#dc2626"], done: ["#6ee7b7", "#059669"]
+  }[phase]
+  return t ? t[light ? 1 : 0] : ""
 }
 
 // What a state change is about, so a change toasts once: a new question gets
@@ -88,7 +140,7 @@ function stateKey(t) {
 // the threads that just started waiting on the user, or just finished.
 function transitions(prev, threads) {
   return threads.filter(function(t) {
-    return t.state !== "working" && prev[t.id] !== stateKey(t)
+    return TOASTS.indexOf(t.state) !== -1 && prev[t.id] !== stateKey(t)
   })
 }
 
@@ -130,9 +182,9 @@ function prText(pr) {
 // What a perm thread asks for, as an i18n key and its argument: the command
 // it wants to run when that is its latest step.
 function permText(t) {
-  if (t.askKind === "command")
-    return t.step && t.step.type === "command_execution" && t.step.detail ? ["perm.commandRun", t.step.detail] : ["perm.command", ""]
-  return [{ "file-read": "perm.read", "file-change": "perm.edit" }[t.askKind] || "perm.other", ""]
+  if (t.askKind === "command" && t.step && t.step.type === "command_execution" && t.step.detail)
+    return ["perm.commandRun", t.step.detail]
+  return [{ command: "perm.command", "file-read": "perm.read", "file-change": "perm.edit" }[t.askKind] || "perm.other", ""]
 }
 
 // Notification bodies are markup; thread text must show as typed.

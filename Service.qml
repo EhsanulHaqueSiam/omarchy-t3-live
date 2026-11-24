@@ -19,10 +19,13 @@ Item {
   // host ("" for this machine) -> { env, threads } from that machine's feed.
   property var sources: ({})
   readonly property var threads: Model.merge(sources)
-  readonly property int workingCount: Model.count(threads, "working")
+  readonly property int liveCount: Model.count(threads, "working") + Model.count(threads, "starting")
   readonly property int inputCount: Model.count(threads, "input")
   readonly property int permCount: Model.count(threads, "perm")
-  readonly property int activeCount: workingCount + inputCount + permCount
+  readonly property int staleCount: Model.count(threads, "stale")
+  readonly property int activeCount: liveCount + inputCount + permCount + staleCount
+  // Mobile's one-word chip for the bar, or null when it shows each count.
+  readonly property var chip: Model.chip({ live: liveCount, input: inputCount, perm: permCount, stale: staleCount })
 
   // "done" or "failed" for a few seconds after a thread finishes, for the bar.
   property string flash: ""
@@ -37,6 +40,8 @@ Item {
   property var seen: ({})
   // stateKeys already escalated, so each question escalates once.
   property var escalated: ({})
+  // host -> when its feed dropped; its threads show as stale for 10 minutes.
+  property var staleSince: ({})
 
   // Asks the widget on the focused monitor to open or close its list.
   signal toggleRequested()
@@ -46,6 +51,7 @@ Item {
   }
 
   function receive(host, parsed) {
+    delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
     root.seen[host] = Model.keys(parsed.threads)
@@ -53,9 +59,22 @@ Item {
     events.forEach(function(t) { announce(Object.assign({}, t, { env: parsed.env, host: host }), false) })
   }
 
+  // The host is gone from settings: forget it.
   function drop(host) {
     delete root.seen[host]
+    delete root.staleSince[host]
     setSource(host, null)
+  }
+
+  // The host's feed ended (machine asleep, network down): keep what it was
+  // doing on screen as stale, like mobile's "Waiting for an update".
+  function lose(host) {
+    delete root.seen[host]
+    var s = root.sources[host]
+    if (!s) return
+    // Retries that fail again keep the first drop time, so stale rows still leave.
+    if (!(host in root.staleSince)) root.staleSince[host] = Date.now()
+    setSource(host, { env: s.env, threads: Model.markStale(s.threads) })
   }
 
   function setSource(host, value) {
@@ -77,8 +96,8 @@ Item {
     if (!root.notify) return
     var took = Model.elapsed((t.ended || Date.now()) - t.since)
     var toast = {
-      input: ["normal", "󱜸", still ? "toast.still" : "toast.input", t.question || strings.t("needsYou"), "answer"],
-      perm: ["normal", "󰻌", still ? "toast.still" : "toast.perm", permLine(t), "review"],
+      input: ["normal", "󱜸", still ? "toast.still" : "toast.input", t.question || strings.t("heading.input"), "answer"],
+      perm: ["normal", "󰻌", still ? "toast.still" : "toast.perm", permLine(t), "approve"],
       done: ["low", "󰗠", "toast.done", strings.t("finishedIn").arg(took), "open"],
       failed: ["normal", "󰀨", "toast.failed", strings.t("failedAfter").arg(took), "open"]
     }[t.state]
@@ -97,6 +116,21 @@ Item {
   Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
 
   Timer { id: flashTimer; interval: 4000; onTriggered: root.flash = "" }
+
+  // Stale threads from a host that stays away leave after 10 minutes.
+  Timer {
+    interval: 60000
+    repeat: true
+    running: root.staleCount > 0
+    onTriggered: {
+      var now = Date.now()
+      Object.keys(root.staleSince).forEach(function(host) {
+        if (now - root.staleSince[host] < 10 * 60000) return
+        delete root.staleSince[host]
+        root.setSource(host, null)
+      })
+    }
+  }
 
   // One critical toast for a question or permission left waiting too long.
   Timer {
@@ -121,7 +155,7 @@ Item {
     target: "siam.t3-live"
     function toggle(): void { root.toggleRequested() }
     function status(): string {
-      return JSON.stringify({ working: root.workingCount, input: root.inputCount, perm: root.permCount, threads: root.threads })
+      return JSON.stringify({ live: root.liveCount, input: root.inputCount, perm: root.permCount, stale: root.staleCount, threads: root.threads })
     }
   }
 
@@ -152,9 +186,9 @@ Item {
           if (parsed) root.receive(feed.host, parsed)
         }
       }
-      // An unreachable machine drops out of the counts until it answers again.
+      // An unreachable machine's threads go stale until it answers again.
       onExited: {
-        root.drop(feed.host)
+        root.lose(feed.host)
         retry.start()
       }
     }
