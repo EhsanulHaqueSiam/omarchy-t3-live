@@ -290,7 +290,8 @@ BarWidget {
       anchors.bottom: parent.bottom
       height: Style.space(28)
       visible: list.contentHeight > list.height + 1
-      opacity: list.atYEnd ? 0 : 1
+      // A few pixels short of the end counts as the end (atYEnd can miss by one).
+      opacity: list.contentY - list.originY + list.height >= list.contentHeight - Style.space(6) ? 0 : 1
       Behavior on opacity { NumberAnimation { duration: Style.duration(160) } }
       gradient: Gradient {
         GradientStop { position: 0; color: "transparent" }

@@ -2,11 +2,11 @@
 
 A compact island for [T3 Code](https://t3.codes) agents in the [Omarchy](https://omarchy.org) bar.
 
-<p align="center"><img src="docs/island.gif" alt="The island changing state: T3 Working, T3 3 live, a colored mix, T3 Answer, T3 Done, T3 Limit" width="600"></p>
+<p align="center"><img src="docs/island.gif" alt="The island changing state: T3 Working, T3 3 live, a colored mix, T3 Answer, T3 Done, T3 Waiting, T3 Limit" width="600"><br><sub><a href="docs/island.mp4">Watch it as video (MP4, 60 fps)</a></sub></p>
 
 It speaks the language of T3 Code's own mobile live notification: one word when one thread is running, colored counts when several are, and a short "Done" when one finishes. Click it for the list.
 
-<p align="center"><img src="docs/list.gif" alt="The list: an approval with Approve, a question with Answer, a failed thread with Resume and Dismiss, working threads with their current step, and a snoozed usage limit with Wake" width="420"></p>
+<p align="center"><img src="docs/list.gif" alt="The list opening: an approval with Approve, questions with Answer, a failed thread with Resume and Dismiss, a usage limit with On reset and Snooze, and working threads with their current step" width="420"><br><sub><a href="docs/list.mp4">Watch the list as video (MP4): rows reorder live, a question arrives, a thread finishes, a limit is snoozed</a></sub></p>
 
 ## Philosophy
 
@@ -34,7 +34,7 @@ rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-t3-live/plan.json"   # its 
 
 ## The island
 
-<img src="docs/states.png" alt="Island states" width="300" align="right">
+<img src="docs/states.png" alt="Island states: T3 Working, T3 3 live, T3 3·1·1, T3 Answer, T3 Done, T3 Waiting, T3 Limit, and a mix of five counts" width="300" align="right">
 
 - `T3 Working`: one thread is running.
 - `T3 3 live`: only running threads.
@@ -67,9 +67,13 @@ One row per thread: the title, one line of what is happening now, and a line wit
 | Offline | `Machine not answering`, for 10 minutes | none |
 | Done | `Finished in 12:04`, for 2 minutes | none |
 
-Clicking a row opens its thread in T3. A long list scrolls inside a card about eight rows tall.
+Clicking a row opens its thread in T3. A long list scrolls inside a card about eight rows tall, and the headline comes back the moment you scroll up.
 
-<p align="center"><img src="docs/all-states.png" alt="Every state in one list" width="320"></p>
+<p align="center"><img src="docs/scroll.gif" alt="A long list scrolling down, then back up a little: the headline slides back in over the rows" width="334"><br><sub><a href="docs/scroll.mp4">Watch it as video (MP4)</a></sub></p>
+
+Every state in one long list, from the top and from the end:
+
+<p align="center"><img src="docs/all-states.png" alt="The top of a long list (approvals, a question, limits with On reset and Snooze, a failure with Resume and Dismiss, working threads) and its end (working threads on another machine, two waiting threads, a finished one, a snoozed limit with Wake)" width="700"></p>
 
 ## What it does, and what it leaves out
 
@@ -86,11 +90,17 @@ Plans (on reset, snooze, dismiss) are kept in `~/.local/state/omarchy-t3-live/pl
 
 By default the phases use T3 Code's own vivid colors, the same ones as its web sidebar and mobile live notification; on a light theme they switch to their darker shades. Everything else, the island, the card, text and borders, follows your Omarchy theme and changes with it. Set the widget's **Colors** setting to **Theme** (`"colors": "Theme"` in its bar entry) to take the phase colors from the theme's palette too. Any color too faint for its background is lifted until it reads.
 
+<p align="center"><img src="docs/colors.png" alt="The same list in T3's own colors (left) and with Colors set to Theme (right)" width="700"><br><sub>T3's colors (left) and <b>Colors: Theme</b> (right), on the same theme.</sub></p>
+
 Rows move rather than jump: a thread that starts waiting on you glides to the top, a new one fades in, a finished one fades out, and colors ease when a state changes.
 
 ## Notifications
 
-A toast arrives when a thread starts waiting on you, finishes, fails or hits a usage limit. Clicking a toast opens the thread; its buttons offer Resume, Resume at reset or Snooze where they apply. A question or approval still waiting after 5 minutes gets one more, critical toast. Turn toasts off with the widget's **Notifications** setting (`"notify": false` in its bar entry).
+<img src="docs/toasts.png" alt="Three toasts: a question with Answer, an approval with Approve, a failure with Open and Resume" width="360" align="right">
+
+A toast arrives when a thread starts waiting on you, finishes, fails or hits a usage limit. Clicking a toast opens the thread; its buttons offer Resume, Resume at reset or Snooze where they apply. A question or approval still waiting after 5 minutes gets one more, critical toast. Turn toasts off with the widget's **Notifications** setting (`"notify": false` in its bar entry). A thread that starts waiting on a pull request or background work gets no toast: nothing needs you yet.
+
+<br clear="right">
 
 ## Linked machines
 
