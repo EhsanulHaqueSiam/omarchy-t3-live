@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "siam.t3-live",
   "name": "T3 Live",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "author": "EhsanulHaqueSiam",
   "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or permission, and what just finished, with toasts. Covers this machine and any ssh hosts.",
   "kinds": [

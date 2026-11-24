@@ -55,6 +55,7 @@ function parseLine(line) {
       project: clip(t.project, 60),
       state: t.state,
       askKind: clip(t.askKind, 40),
+      permDetail: clip(t.permDetail, 160),
       question: clip(t.question, 300),
       step: step,
       pr: pr,
@@ -189,6 +190,46 @@ function tint(phase, light) {
   return t ? t[light ? 1 : 0] : ""
 }
 
+// A stopped thread the user dismissed stays out of sight until it stops
+// again (a new run ends at a new time).
+function dismissed(t, plan) {
+  return !!(plan && plan.dismissed && stopped(t) && plan.dismissed === t.ended)
+}
+
+// The buttons a row shows, as [i18n key, action, phase]; only what that state
+// needs. Questions and approvals open the thread in T3 (they need its
+// context); stopped threads resume, wait for their limit, snooze or dismiss
+// right in the list. ctx: { phase: limitPhase(), snoozed, ownSnooze, resuming }.
+//   question -> Answer · approval -> Approve · failed -> Resume, Dismiss
+//   limit: not planned -> On reset, Snooze · planned -> Cancel, Snooze
+//          T3 resumes it -> Snooze · reset -> Resume, Dismiss
+//   snoozed by you -> Wake · snoozed by T3, resuming, anything else -> none
+function actions(t, ctx) {
+  if (t.state === "input") return [["answer", "open", "input"]]
+  if (t.state === "perm") return [["approve", "open", "perm"]]
+  if (!stopped(t) || ctx.resuming) return []
+  if (t.state === "failed") return [["resume", "resume", "working"], ["dismiss", "dismiss", ""]]
+  if (ctx.snoozed) return ctx.ownSnooze ? [["wake", "unsnooze", ""]] : []
+  switch (ctx.phase) {
+    case "reset": return [["resume", "resume", "working"], ["dismiss", "dismiss", ""]]
+    case "armed": return [["cancel", "disarm", ""], ["snooze", "snooze", ""]]
+    case "t3": return [["snooze", "snooze", ""]]
+    default: return [["resumeAt", "arm", "working"], ["snooze", "snooze", ""]]
+  }
+}
+
+// The island's tooltip: each count by name, [i18n key, n] pairs.
+function tooltip(c) {
+  var out = []
+  if (c.live) out.push(["tip.working", c.live])
+  if (c.input) out.push(["tip.input", c.input])
+  if (c.perm) out.push(["tip.perm", c.perm])
+  var stoppedN = (c.failed || 0) + (c.limited || 0)
+  if (stoppedN) out.push(["tip.stopped", stoppedN])
+  if (c.stale) out.push(["tip.stale", c.stale])
+  return out
+}
+
 // What a state change is about, so a change toasts once: a new question gets
 // a new `since`, a new finish a new `ended`.
 function stateKey(t) {
@@ -238,11 +279,13 @@ function prText(pr) {
   return "pr.open"
 }
 
-// What a perm thread asks for, as an i18n key and its argument: the command
-// it wants to run when that is its latest step.
+// What a perm thread asks for, as an i18n key and its argument, taken from
+// the approval's own item: the command to run, or the file to read or edit.
 function permText(t) {
-  if (t.askKind === "command" && t.step && t.step.type === "command_execution" && t.step.detail)
-    return ["perm.commandRun", t.step.detail]
+  var d = t.permDetail || ""
+  if (d !== "" && t.askKind === "command") return ["perm.commandRun", d]
+  if (d !== "" && t.askKind === "file-change") return ["perm.editFile", d.split("/").pop()]
+  if (d !== "" && t.askKind === "file-read") return ["perm.readFile", d.split("/").pop()]
   return [{ command: "perm.command", "file-read": "perm.read", "file-change": "perm.edit" }[t.askKind] || "perm.other", ""]
 }
 

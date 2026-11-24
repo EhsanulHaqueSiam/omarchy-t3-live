@@ -14,32 +14,38 @@ Item {
   id: root
 
   property var shell: null
-  // Set by the bar widget from its settings.
-  property var hosts: [""]
+  // Set by the bar widget from its settings. A string, so an unchanged
+  // setting never rebuilds the feeds.
+  property string hostsText: ""
   property bool notify: true
+  readonly property var hosts: [""].concat(Model.parseHosts(hostsText))
 
   // host ("" for this machine) -> { env, threads } from that machine's feed.
   property var sources: ({})
   readonly property var allThreads: Model.merge(sources)
 
-  // What the user planned for limited threads, by planKey: { resetAt, resume,
-  // snooze }. Kept in a file so a planned resume survives a shell restart.
+  // What the user planned for stopped threads, by planKey: { resetAt, resume,
+  // snooze } for a limit, { dismissed: ended } for a dismissed row. Kept in a
+  // file so a planned resume survives a shell restart.
   property var plan: ({})
-  // planKeys sent a resume a moment ago: their row says "Resuming" until the
-  // thread's machine reports it running again.
+  // planKey -> when a resume was sent: the row says "Resuming" until the
+  // thread's machine reports it running again, or for 60 s at most.
   property var resuming: ({})
   // Moves only while a limited thread is listed, so limits reset on time.
   property real now: Date.now()
 
   // Snoozed threads stay out of the bar and sit at the end of the list.
+  // Dismissed threads are gone from the list; snoozed ones sit at its end.
   readonly property var threads: {
     var awake = [], asleep = []
     root.allThreads.forEach(function(t) {
-      (Model.snoozed(t, root.now, root.plan[planKey(t)]) ? asleep : awake).push(t)
+      var p = root.plan[planKey(t)]
+      if (Model.dismissed(t, p)) return
+      ;(Model.snoozed(t, root.now, p) ? asleep : awake).push(t)
     })
     return awake.concat(asleep)
   }
-  readonly property var awakeThreads: allThreads.filter(function(t) { return !Model.snoozed(t, root.now, root.plan[planKey(t)]) })
+  readonly property var awakeThreads: threads.filter(function(t) { return !Model.snoozed(t, root.now, root.plan[planKey(t)]) })
   readonly property int liveCount: Model.count(awakeThreads, "working") + Model.count(awakeThreads, "starting")
   readonly property int inputCount: Model.count(awakeThreads, "input")
   readonly property int permCount: Model.count(awakeThreads, "perm")
@@ -80,6 +86,10 @@ Item {
   function limitPhase(t) { return Model.limitPhase(t, root.now, planFor(t)) }
   function isSnoozed(t) { return Model.snoozed(t, root.now, planFor(t)) }
   function isResuming(t) { return !!root.resuming[planKey(t)] }
+  function rowActions(t) {
+    var p = planFor(t)
+    return Model.actions(t, { phase: limitPhase(t), snoozed: isSnoozed(t), ownSnooze: !!(p && p.snooze), resuming: isResuming(t) })
+  }
 
   function receive(host, parsed) {
     delete root.staleSince[host]
@@ -91,16 +101,19 @@ Item {
     events.forEach(function(t) { announce(Object.assign({}, t, { env: parsed.env, host: host }), false) })
   }
 
-  // Plans and "Resuming" marks end once the thread is no longer stopped, or
-  // a newer limit replaced the one they were for.
+  // Plans and "Resuming" marks end once the thread is no longer stopped, a
+  // newer limit replaced the one they were for, or it stopped again since a
+  // dismissal.
   function tidy(host, list) {
     var byId = {}
     list.forEach(function(t) { byId[t.id] = t })
     var plan = Object.assign({}, root.plan), resuming = Object.assign({}, root.resuming), changed = false
     Object.keys(plan).forEach(function(key) {
-      var parts = key.split("|"), t = byId[parts[1]]
+      var parts = key.split("|"), t = byId[parts[1]], e = plan[key]
       if (parts[0] !== host) return
-      if (!t || t.state !== "limited" || !t.failure || t.failure.resetAt !== plan[key].resetAt) { delete plan[key]; changed = true }
+      var limitHolds = !(e.resume || e.snooze) || (t && t.state === "limited" && t.failure && t.failure.resetAt === e.resetAt)
+      var dismissalHolds = !e.dismissed || (t && t.ended === e.dismissed)
+      if (!t || !Model.stopped(t) || !limitHolds || !dismissalHolds) { delete plan[key]; changed = true }
     })
     Object.keys(resuming).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]]
@@ -145,12 +158,15 @@ Item {
   // Ids and hosts were validated when parsed, so they are safe in the ssh line.
   function resumeNow(t) {
     var key = planKey(t)
+    // One send per stop: a second click, or a toast and the row, must not
+    // queue a second turn. T3's CLI queues a message on a busy thread.
+    if (root.resuming[key] || !Model.stopped(t)) return
     var argv = t.host === ""
       ? ["bash", "-lc", 'exec "$@"', "bash", "t3", "thread", "send", t.id, root.resumeMessage]
       : ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", t.host,
          'PATH="$HOME/.local/bin:$HOME/.t3/bin:$PATH" t3 thread send ' + t.id + ' "' + root.resumeMessage + '"']
     var resuming = Object.assign({}, root.resuming)
-    resuming[key] = true
+    resuming[key] = Date.now()
     root.resuming = resuming
     var plan = Object.assign({}, root.plan)
     if (plan[key]) { delete plan[key]; setPlan(plan) }
@@ -159,14 +175,16 @@ Item {
   }
 
   function setPlanned(t, field, value) {
-    if (t.state !== "limited" || !t.failure) return
+    if (field !== "dismissed" && (t.state !== "limited" || !t.failure)) return
+    if (field === "dismissed" && !Model.stopped(t)) return
     var key = planKey(t), plan = Object.assign({}, root.plan)
-    var entry = Object.assign({ resetAt: t.failure.resetAt, resume: false, snooze: false }, plan[key])
+    var entry = Object.assign({ resetAt: t.failure ? t.failure.resetAt : 0, resume: false, snooze: false, dismissed: 0 }, plan[key])
     entry[field] = value
-    if (!entry.resume && !entry.snooze) delete plan[key]
+    if (!entry.resume && !entry.snooze && !entry.dismissed) delete plan[key]
     else plan[key] = entry
     setPlan(plan)
   }
+  function dismiss(t) { setPlanned(t, "dismissed", t.ended || 1) }
   function armResume(t) { setPlanned(t, "resume", true) }
   function disarmResume(t) { setPlanned(t, "resume", false) }
   function snooze(t) { setPlanned(t, "snooze", true) }
@@ -185,8 +203,9 @@ Item {
     var plan = {}
     Object.keys(data).slice(0, 100).forEach(function(key) {
       var v = data[key]
-      if (!/^[A-Za-z0-9_.@-]*\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v.resetAt !== "number") return
-      plan[key] = { resetAt: v.resetAt, resume: v.resume === true, snooze: v.snooze === true }
+      if (!/^[A-Za-z0-9_.@-]*\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
+      plan[key] = { resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, resume: v.resume === true, snooze: v.snooze === true,
+        dismissed: typeof v.dismissed === "number" ? v.dismissed : 0 }
     })
     root.plan = plan
   }
@@ -196,6 +215,8 @@ Item {
     root.now = Date.now()
     root.allThreads.forEach(function(t) {
       var p = planFor(t)
+      // T3's own auto-resume, armed since, owns the reset: never send twice.
+      if (t.recovery && t.recovery.autoResume) return
       if (p && p.resume && t.state === "limited" && Model.limitPhase(t, root.now, p) === "reset") resumeNow(t)
     })
   }
@@ -261,15 +282,17 @@ Item {
       case "perm": toast = ["normal", "󰻌", still ? "toast.still" : "toast.perm", permLine(t), open.slice(0, 1).concat([strings.t("approve")], open.slice(2))]; break
       case "done": toast = ["low", "󰗠", "toast.done", strings.t("finishedIn").arg(took), open]; break
       case "failed":
-        toast = ["normal", "󰅙", "toast.failed", (t.failure && t.failure.message) || strings.t("failedAfter").arg(took), ipc("resume", "resume").concat(open)]
+        // Open goes first: clicking a toast's body runs its first action, and
+        // that must never send anything.
+        toast = ["normal", "󰅙", "toast.failed", (t.failure && t.failure.message) || strings.t("failedAfter").arg(took), open.concat(ipc("resume", "resume"))]
         break
       case "limited":
         var phase = Model.limitPhase(t, Date.now(), undefined)
         var reset = t.failure ? t.failure.resetAt : 0
         toast = ["normal", "󰔟", "toast.limited",
           phase === "t3" ? strings.t("resumesAt").arg(clock(reset)) : phase === "reset" ? strings.t("limitReset") : strings.t("resetsAt").arg(clock(reset)),
-          phase === "wait" ? ipc("resumeAtReset", "resumeAtReset").concat(ipc("snooze", "snooze"))
-            : phase === "reset" ? ipc("resume", "resume").concat(open) : open]
+          phase === "wait" ? open.concat(ipc("resumeAtReset", "resumeAtReset"), ipc("snooze", "snooze"))
+            : phase === "reset" ? open.concat(ipc("resume", "resume")) : open]
         break
       default: return
     }
@@ -286,6 +309,18 @@ Item {
   Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
 
   Timer { id: flashTimer; interval: 4000; onTriggered: root.flash = "" }
+
+  // A resume that started nothing within 60 s gets its buttons back.
+  Timer {
+    interval: 10000
+    repeat: true
+    running: Object.keys(root.resuming).length > 0
+    onTriggered: {
+      var now = Date.now(), resuming = Object.assign({}, root.resuming), changed = false
+      Object.keys(resuming).forEach(function(k) { if (now - resuming[k] > 60000) { delete resuming[k]; changed = true } })
+      if (changed) root.resuming = resuming
+    }
+  }
 
   // Limits reset on time and planned resumes fire, checked every 30 s while
   // a limited thread is listed.

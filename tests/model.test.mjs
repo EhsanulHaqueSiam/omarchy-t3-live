@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed dismissed actions tooltip stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -94,6 +94,39 @@ const mixStop = M.face({ live: 2, input: 0, perm: 0, stale: 0, failed: 1, limite
 assert.deepEqual(mixStop.map(x => x.arg + ":" + x.phase), ["2:working", "2:failed"])
 assert.deepEqual(M.summary([t("a", "working", 1), t("b", "limited", 1, 2)]), ["summary.stopped", 1])
 
+// Every state's buttons: only what that state needs.
+const A = (state, ctx = {}) => M.actions({ state }, Object.assign({ phase: "wait", snoozed: false, ownSnooze: false, resuming: false }, ctx)).map(x => x[0]).join(",")
+for (const s of ["starting", "working", "stale", "done"]) assert.equal(A(s), "", s)
+assert.equal(A("input"), "answer")
+assert.equal(A("perm"), "approve")
+assert.equal(A("failed"), "resume,dismiss")
+assert.equal(A("failed", { resuming: true }), "")
+assert.equal(A("limited", { phase: "wait" }), "resumeAt,snooze")
+assert.equal(A("limited", { phase: "armed" }), "cancel,snooze")
+assert.equal(A("limited", { phase: "t3" }), "snooze")
+assert.equal(A("limited", { phase: "reset" }), "resume,dismiss")
+assert.equal(A("limited", { phase: "wait", snoozed: true, ownSnooze: true }), "wake")
+assert.equal(A("limited", { phase: "wait", snoozed: true, ownSnooze: false }), "")
+assert.equal(A("limited", { phase: "reset", resuming: true }), "")
+// Opening is the only thing a question or approval offers, whatever else is true.
+assert.equal(A("input", { resuming: true, snoozed: true }), "answer")
+for (const [, , phase] of [].concat(...["input", "perm", "failed"].map(s => M.actions({ state: s }, { phase: "wait" }))))
+  assert.ok(["input", "perm", "working", ""].includes(phase))
+
+// Dismissed: a stopped thread hides until it stops again.
+assert.equal(M.dismissed({ state: "failed", ended: 5 }, { dismissed: 5 }), true)
+assert.equal(M.dismissed({ state: "failed", ended: 9 }, { dismissed: 5 }), false)
+assert.equal(M.dismissed({ state: "working", ended: 5 }, { dismissed: 5 }), false)
+assert.equal(M.dismissed({ state: "failed", ended: 5 }, undefined), false)
+
+// Approval text comes from the approval's own item.
+assert.deepEqual(M.permText({ askKind: "command", permDetail: "rm -rf build" }), ["perm.commandRun", "rm -rf build"])
+assert.deepEqual(M.permText({ askKind: "file-change", permDetail: "/a/b/Hero.tsx" }), ["perm.editFile", "Hero.tsx"])
+assert.deepEqual(M.permText({ askKind: "command", permDetail: "", step: { type: "command_execution", detail: "other" } }), ["perm.command", ""])
+
+// The tooltip names each count.
+assert.deepEqual(M.tooltip({ live: 3, input: 1, perm: 0, stale: 0, failed: 1, limited: 1 }), [["tip.working", 3], ["tip.input", 1], ["tip.stopped", 2]])
+
 // The island face: one word when chip() gives one, colored counts for a mix,
 // the finish word during a flash, and numbers only on a vertical bar.
 const text = f => f.map(x => x.kind === "mark" ? "T3" : x.kind === "sep" ? "·" : x.kind === "glyph" ? "*" : x.kind === "word" ? x.key + (x.arg ? "(" + x.arg + ")" : "") : x.arg).join(" ")
@@ -142,7 +175,6 @@ assert.equal(M.prText({ state: "open", checks: "success", review: "CHANGES_REQUE
 assert.equal(M.prText(null), "")
 
 // Permission text names the command when the latest step is that command.
-assert.deepEqual(M.permText({ askKind: "command", step: { type: "command_execution", detail: "rm -rf build" } }), ["perm.commandRun", "rm -rf build"])
 assert.deepEqual(M.permText({ askKind: "command", step: null }), ["perm.command", ""])
 assert.deepEqual(M.permText({ askKind: "file-change" }), ["perm.edit", ""])
 assert.deepEqual(M.permText({ askKind: "permission" }), ["perm.other", ""])

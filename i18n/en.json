@@ -81,5 +81,28 @@
     "one": "Finished, %1 stopped",
     "other": "Finished, %1 stopped"
   },
-  "resumeAt": "On reset"
+  "resumeAt": "On reset",
+  "dismiss": "Dismiss",
+  "perm.editFile": "Wants to edit %1",
+  "perm.readFile": "Wants to read %1",
+  "tip.working": {
+    "one": "%1 working",
+    "other": "%1 working"
+  },
+  "tip.input": {
+    "one": "%1 question",
+    "other": "%1 questions"
+  },
+  "tip.perm": {
+    "one": "%1 approval",
+    "other": "%1 approvals"
+  },
+  "tip.stopped": {
+    "one": "%1 stopped",
+    "other": "%1 stopped"
+  },
+  "tip.stale": {
+    "one": "%1 out of date",
+    "other": "%1 out of date"
+  }
 }

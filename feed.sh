@@ -8,6 +8,7 @@
 #     "recovery",   T3's own {autoResume, snooze} for this limit, when armed
 #     "askKind",    the pending request's kind, for input and perm
 #     "question",   what an input thread asks
+#     "permDetail", the command or file a perm thread asks about
 #     "step",       [type, detail] of a working thread's latest item
 #     "pr",         {n, state, checks, review} of its newest pull request
 #     "since",      when the run (or the pending request) started
@@ -45,7 +46,8 @@ WITH live AS (
   UNION ALL
   SELECT thread_id, since, ended, status, 1, run_id FROM ended
 ), ask AS (
-  SELECT thread_id, runtime_request_id, kind, min(created_at) AS since
+  -- SQLite takes the bare columns from the row holding min(created_at).
+  SELECT thread_id, runtime_request_id, node_id, kind, min(created_at) AS since
   FROM orchestration_v2_projection_runtime_requests
   WHERE status = 'pending' AND kind <> 'dynamic_tool_call'
   GROUP BY thread_id
@@ -69,6 +71,13 @@ WITH live AS (
       ELSE 'working'
     END AS state,
     coalesce(a.kind, '') AS askKind,
+    -- The approval's own item (the request node's parent), not just the latest one.
+    CASE WHEN a.kind IN ('command', 'file-read', 'file-change', 'permission') THEN coalesce((
+      SELECT replace(replace(substr(coalesce(json_extract(i.payload_json, '\$.input'), json_extract(i.payload_json, '\$.fileName'), ''), 1, 160), char(10), ' '), char(13), ' ')
+      FROM orchestration_v2_projection_turn_items i
+      WHERE i.thread_id = t.thread_id
+        AND i.node_id = (SELECT json_extract(n.payload_json, '\$.parentNodeId') FROM orchestration_v2_projection_nodes n WHERE n.node_id = a.node_id)
+      LIMIT 1), '') ELSE '' END AS permDetail,
     coalesce(a.since, x.since) AS since,
     coalesce(x.ended, '') AS ended,
     CASE WHEN a.kind = 'user_input' THEN coalesce((
@@ -103,12 +112,15 @@ WITH live AS (
     -- A failed thread leaves once settled, and hides while T3 has it snoozed.
     AND (x.outcome IS NOT 'failed' OR (json_extract(t.payload_json, '\$.settledAt') IS NULL
       AND coalesce(json_extract(t.payload_json, '\$.snoozedUntil'), '') < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+  -- Most urgent first, so the cap never drops a question for a finished thread.
+  ORDER BY CASE WHEN state IN ('input', 'perm') THEN 0 WHEN state = 'failed' THEN 1
+                WHEN state IN ('working', 'starting') THEN 2 ELSE 3 END, since DESC
   LIMIT 50
 )
 SELECT json_group_array(json_object('id', id, 'title', substr(title, 1, 120),
   'project', substr(project, 1, 60),
   'state', CASE WHEN state = 'failed' AND json_extract(failure, '\$.class') = 'usage_limit' THEN 'limited' ELSE state END,
-  'askKind', askKind,
+  'askKind', askKind, 'permDetail', permDetail,
   'failure', CASE WHEN failure IS NULL THEN NULL ELSE json_object('class', json_extract(failure, '\$.class'),
     'message', substr(json_extract(failure, '\$.message'), 1, 200), 'resetAt', json_extract(failure, '\$.resetAt')) END,
   'recovery', json(recovery),
@@ -117,8 +129,18 @@ SELECT json_group_array(json_object('id', id, 'title', substr(title, 1, 120),
 
 last=
 tick=0
+fails=0
 while :; do
-  rows=$(sqlite3 -readonly -noheader "file:$db?mode=ro" "$sql" </dev/null 2>/dev/null)
+  # A busy database waits up to 2 s. A query that keeps failing (T3 changed
+  # its schema, the file is gone) ends the feed, so the bar shows this machine
+  # as out of date instead of its last snapshot as if it were live.
+  if rows=$(sqlite3 -readonly -noheader -cmd ".timeout 2000" "file:$db?mode=ro" "$sql" </dev/null 2>/dev/null) && [ -n "$rows" ]; then
+    fails=0
+  else
+    fails=$((fails + 1))
+    [ "$fails" -ge 3 ] && { echo "feed.sh: cannot read $db" >&2; exit 2; }
+    rows=$last
+  fi
   if [ -n "$rows" ] && [ "$rows" != "$last" ]; then
     printf '{"env":"%s","threads":%s}\n' "$env" "$rows" || exit 0
     last=$rows

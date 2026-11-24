@@ -8,9 +8,9 @@ import "Model.js" as Model
 
 // A compact island for T3 Code threads, worded like T3's mobile live
 // notification: "T3 Working" for one thread, "T3 3 live" for several,
-// "T3 3·1·1" (live, questions, approvals in their colors) for a mix, and
-// "T3 Done" for a few seconds when one finishes. Clicking it drops down one
-// row per thread; a thread waiting on you has a button that opens it.
+// "T3 3·1·1" (live, questions, approvals, stopped in their colors) for a mix,
+// and "T3 Done" for a few seconds when one finishes. Clicking it drops down
+// one row per thread, with only the buttons that thread's state needs.
 // The threads come from Service.qml, which every monitor's widget shares.
 BarWidget {
   id: root
@@ -18,10 +18,10 @@ BarWidget {
 
   readonly property var service: bar && bar.shell ? bar.shell.firstPartyServiceFor("siam.t3-live") : null
   readonly property var threads: service ? service.threads : []
-  readonly property string flash: service ? service.flash : ""
   readonly property bool active: service ? service.activeCount > 0 : false
   readonly property var counts: service ? service.counts : { live: 0, input: 0, perm: 0, stale: 0, failed: 0, limited: 0 }
-  readonly property var hosts: [""].concat(Model.parseHosts(root.setting("sshHosts", "")))
+  // A finish flashes, unless a question or approval is waiting: that stays up.
+  readonly property string flash: service && counts.input + counts.perm === 0 ? service.flash : ""
 
   readonly property string barFont: bar ? bar.fontFamily : Style.font.family
   readonly property bool lightPopup: luminance(Commons.Color.popups.text) < 0.5
@@ -34,30 +34,12 @@ BarWidget {
   property bool popupOpen: false
   property real now: Date.now()
   function close() { popupOpen = false }
+  // The list opens whenever it has rows, a finished thread's included.
+  function toggle() { popupOpen = root.threads.length > 0 && !popupOpen }
 
   function openThread(t) {
     if (root.service) root.service.openThread(t)
     root.close()
-  }
-
-  // A row's buttons as [label, action, phase]. Anything that needs your
-  // judgement (a question, an approval) opens the thread in T3; stopped
-  // threads resume, wait for their limit, or snooze right here.
-  function rowActions(t) {
-    var s = root.service
-    if (!s) return []
-    if (t.state === "input") return [["answer", "open", "input"]]
-    if (t.state === "perm") return [["approve", "open", "perm"]]
-    if (s.isResuming(t)) return []
-    if (t.state === "failed") return [["resume", "resume", "working"]]
-    if (t.state !== "limited") return []
-    if (s.isSnoozed(t)) return s.planFor(t) && s.planFor(t).snooze ? [["wake", "unsnooze", ""]] : []
-    switch (s.limitPhase(t)) {
-      case "reset": return [["resume", "resume", "working"]]
-      case "armed": return [["cancel", "disarm", ""], ["snooze", "snooze", ""]]
-      case "t3": return [["snooze", "snooze", ""]]
-      default: return [["resumeAt", "arm", "working"], ["snooze", "snooze", ""]]
-    }
   }
 
   function act(t, action) {
@@ -70,6 +52,7 @@ BarWidget {
       case "disarm": s.disarmResume(t); return
       case "snooze": s.snooze(t); return
       case "unsnooze": s.unsnooze(t); return
+      case "dismiss": s.dismiss(t); return
     }
   }
 
@@ -81,26 +64,35 @@ BarWidget {
   // The island is always black, so it always takes T3's light phase colors.
   function islandTint(phase) { return Model.tint(phase, false) || (phase === "stale" ? "#8a8a8a" : "#ffffff") }
 
-  onActiveChanged: if (!active) close()
+  onThreadsChanged: if (threads.length === 0) close()
 
-  // The widget owns the settings; the shared service follows them.
-  Binding { target: root.service; when: !!root.service; property: "hosts"; value: root.hosts }
-  Binding { target: root.service; when: !!root.service; property: "notify"; value: root.setting("notify", true) }
+  // The widget owns the settings; the shared service follows them. Plain
+  // values, never restored: a widget leaving (a monitor unplugged) must not
+  // put back defaults the other monitors' widgets still set.
+  Binding { target: root.service; when: !!root.service; property: "hostsText"; value: String(root.setting("sshHosts", "")); restoreMode: Binding.RestoreNone }
+  Binding { target: root.service; when: !!root.service; property: "notify"; value: root.setting("notify", true) === true; restoreMode: Binding.RestoreNone }
 
   Connections {
     target: root.service
     function onToggleRequested() {
       var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
-      if (focused === "" || focused === root.monitorName)
-        root.popupOpen = root.active && !root.popupOpen
+      if (focused === "" || focused === root.monitorName) root.toggle()
     }
   }
 
-  visible: active || flash !== ""
-  implicitWidth: !visible ? 0 : vertical ? barSize : island.width + Style.space(8)
-  implicitHeight: !visible ? 0 : vertical ? island.height + Style.space(8) : barSize
-
   Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+
+  // ---- Showing and hiding ----
+  // The island fades and the space it takes eases open or shut, so the icons
+  // beside it slide instead of jumping. It stays while its list is open.
+  readonly property bool shown: active || flash !== "" || popupOpen
+  readonly property real islandSpan: root.vertical ? island.height + Style.space(8) : island.width + Style.space(8)
+  property real span: shown ? islandSpan : 0
+  Behavior on span { NumberAnimation { duration: Style.duration(root.shown ? 180 : 120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+
+  visible: shown || span > 0.5
+  implicitWidth: vertical ? barSize : span
+  implicitHeight: vertical ? span : barSize
 
   // Ticks only while the list is open, for the elapsed times.
   Timer {
@@ -113,7 +105,8 @@ BarWidget {
 
   // ---- Bar: the island ----
   // Two faces trade places when the content changes: the old one fades and
-  // shrinks a little, the new one grows in, and the island's width follows.
+  // shrinks a little first, then the new one grows in, while the island's
+  // width eases to fit. Never both at once.
   readonly property var faceNow: Model.face(root.counts, root.flash, root.vertical)
   readonly property string faceKey: JSON.stringify(faceNow)
   property var faceA: []
@@ -136,10 +129,12 @@ BarWidget {
     border.width: 1
     border.color: Qt.rgba(1, 1, 1, mouse.containsMouse || root.popupOpen ? 0.28 : 0.14)
     clip: true
+    opacity: root.shown ? 1 : 0
     scale: mouse.pressed ? 0.97 : 1
 
     Behavior on width { NumberAnimation { duration: Style.duration(220); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
     Behavior on height { NumberAnimation { duration: Style.duration(220); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+    Behavior on opacity { NumberAnimation { duration: Style.duration(root.shown ? 180 : 120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
     Behavior on scale { NumberAnimation { duration: Style.duration(100); easing.type: Easing.OutCubic } }
     Behavior on border.color { ColorAnimation { duration: Style.duration(160) } }
 
@@ -159,9 +154,19 @@ BarWidget {
     verticalItemAlignment: Grid.AlignVCenter
     opacity: shown ? 1 : 0
     scale: shown ? 1 : 0.94
-    // Out faster than in.
-    Behavior on opacity { NumberAnimation { duration: Style.duration(face.shown ? 180 : 120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
-    Behavior on scale { NumberAnimation { duration: Style.duration(face.shown ? 180 : 120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+    // Out first (120 ms), then in (180 ms), so two labels never overlap.
+    Behavior on opacity {
+      SequentialAnimation {
+        PauseAnimation { duration: face.shown ? Style.duration(120) : 0 }
+        NumberAnimation { duration: Style.duration(face.shown ? 180 : 120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      }
+    }
+    Behavior on scale {
+      SequentialAnimation {
+        PauseAnimation { duration: face.shown ? Style.duration(120) : 0 }
+        NumberAnimation { duration: Style.duration(face.shown ? 180 : 120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      }
+    }
 
     Repeater {
       model: face.segments
@@ -202,12 +207,20 @@ BarWidget {
     }
   }
 
+  // "3 working · 1 question · 1 approval": the colors, named.
+  readonly property string tipText: Model.tooltip(root.counts).map(function(p) { return strings.tn(p[0], p[1]).arg(p[1]) }).join("  ·  ")
+
   MouseArea {
     id: mouse
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    onClicked: root.popupOpen = root.active && !root.popupOpen
+    onClicked: {
+      if (root.bar) root.bar.hideTooltip(root)
+      root.toggle()
+    }
+    onEntered: if (root.bar && !root.popupOpen && root.tipText !== "") root.bar.showTooltip(root, root.tipText)
+    onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
   // ---- Dropdown: mobile's summary, then one row per thread ----
@@ -224,16 +237,28 @@ BarWidget {
     // after the card has faded out.
     readonly property bool revealed: root.popupOpen || popup.visible
 
+    // A long list scrolls inside the card instead of running off the screen.
+    Flickable {
+      anchors.fill: parent
+      contentWidth: width
+      contentHeight: list.implicitHeight
+      clip: true
+      interactive: contentHeight > height
+      boundsBehavior: Flickable.StopAtBounds
+
     Column {
       id: list
       width: parent.width
       spacing: 0
 
-      // "2 need you  5 active", like the live notification's title.
+      // "2 need you  5 active", like the live notification's title, on the
+      // rows' icon line.
       Row {
-        readonly property var head: Model.summary(root.threads)
-        readonly property int activeTotal: root.threads.filter(function(t) { return !Model.finished(t) }).length
-        x: Style.space(4)
+        // Snoozed threads are out of the way on purpose: the headline skips them.
+        readonly property var awake: root.service ? root.service.awakeThreads : []
+        readonly property var head: Model.summary(awake)
+        readonly property int activeTotal: awake.filter(function(t) { return !Model.finished(t) }).length
+        x: Style.space(6)
         spacing: Style.space(8)
         bottomPadding: Style.space(6)
 
@@ -261,19 +286,20 @@ BarWidget {
       Repeater {
         model: root.threads
 
-        // working / starting: step and elapsed time; input: question, Answer;
-        // perm: what it wants, Approve; stale: waiting for an update;
-        // done / failed: how long it took (listed for 2 minutes).
+        // Title across the full row; under it one line of what happens now and
+        // a line of project · machine · PR, with the state's buttons (see
+        // Model.actions) beside those two lines, or the elapsed time / outcome.
         delegate: Item {
           id: row
           required property var modelData
           required property int index
           readonly property string kind: modelData.state
-          readonly property var actions: root.rowActions(modelData)
-          readonly property bool asking: actions.length > 0
+          readonly property var buttonsFor: root.service ? root.service.rowActions(modelData) : []
+          readonly property bool hasButtons: buttonsFor.length > 0
           readonly property bool dimmed: !!root.service && root.service.isSnoozed(modelData)
           readonly property color tint: Model.tint(kind, root.lightPopup) || Commons.Color.popups.text
           readonly property color ink: Commons.Color.popups.text
+          readonly property real inset: Style.space(8)
           readonly property string detail: {
             switch (kind) {
               case "input": return modelData.question !== "" ? modelData.question : strings.t("heading.input")
@@ -338,8 +364,8 @@ BarWidget {
           Rectangle {
             visible: row.index > 0
             anchors.top: parent.top
-            x: Style.space(8)
-            width: parent.width - Style.space(16)
+            x: row.inset
+            width: parent.width - row.inset * 2
             height: 1
             color: row.ink
             opacity: 0.07
@@ -373,12 +399,12 @@ BarWidget {
             id: content
             x: mark.x + mark.width + Style.space(9)
             anchors.verticalCenter: parent.verticalCenter
-            width: (row.asking ? buttons.x : trailing.x) - x - Style.space(10)
+            width: row.width - x - row.inset
             spacing: Style.space(1)
 
             Text {
               id: title
-              width: parent.width
+              width: parent.width - (trailing.visible ? trailing.width + Style.space(10) : 0)
               elide: Text.ElideRight
               textFormat: Text.PlainText
               text: row.modelData.title
@@ -388,8 +414,9 @@ BarWidget {
               font.bold: true
             }
             Text {
+              id: detailLine
               visible: row.detail !== ""
-              width: parent.width
+              width: parent.width - (row.hasButtons ? buttons.width + Style.space(10) : 0)
               wrapMode: row.kind === "input" || row.kind === "perm" ? Text.Wrap : Text.NoWrap
               maximumLineCount: row.kind === "input" || row.kind === "perm" ? 2 : 1
               elide: Text.ElideRight
@@ -401,7 +428,8 @@ BarWidget {
               font.pixelSize: Style.font.bodySmall
             }
             Text {
-              width: parent.width
+              id: metaLine
+              width: detailLine.width
               elide: Text.ElideRight
               textFormat: Text.PlainText
               text: row.meta
@@ -412,43 +440,45 @@ BarWidget {
             }
           }
 
-          // Elapsed time while it runs, the outcome once it ends.
+          // Elapsed time while it runs, the outcome once it ends; on the title line.
           Text {
             id: trailing
-            visible: !row.asking
-            x: row.width - width - Style.space(8)
-            anchors.verticalCenter: parent.verticalCenter
+            visible: !row.hasButtons && row.kind !== "stale"
+            x: row.width - width - row.inset
+            y: content.y
+            height: title.height
+            verticalAlignment: Text.AlignVCenter
             textFormat: Text.PlainText
             text: row.kind === "done" ? strings.t("done")
               : row.kind === "failed" ? strings.t("failed")
               : row.kind === "limited" ? strings.t("limit")
-              : row.kind === "stale" ? "" : Model.elapsed(root.now - row.modelData.since)
-            color: row.kind === "done" || row.kind === "failed" ? row.tint : row.ink
+              : Model.elapsed(root.now - row.modelData.since)
+            color: row.kind === "done" || row.kind === "failed" || row.kind === "limited" ? row.tint : row.ink
             font.family: root.barFont
             font.pixelSize: Style.font.bodySmall
             font.bold: true
             font.features: { "tnum": 1 }
           }
 
+          // The state's buttons, beside the detail and meta lines so the title
+          // keeps the full row. A filled capsule acts; a plain one is the way out.
           Row {
             id: buttons
-            visible: row.asking
-            x: row.width - width - Style.space(8)
-            anchors.verticalCenter: parent.verticalCenter
+            visible: row.hasButtons
+            x: row.width - width - row.inset
+            y: content.y + title.height + Style.space(1) + Math.max(0, (content.height - title.height - Style.space(1) - height) / 2)
             spacing: Style.space(5)
 
             Repeater {
-              model: row.actions
+              model: row.buttonsFor
               delegate: Rectangle {
                 id: capsule
                 required property var modelData
-                // A filled capsule acts; a plain one (Snooze, Cancel, Wake) is the quiet way out.
                 readonly property bool filled: modelData[2] !== ""
-                readonly property color fill: filled ? (Model.tint(modelData[2], root.lightPopup) || row.ink) : "transparent"
                 width: capsuleLabel.implicitWidth + Style.space(filled ? 20 : 14)
                 height: capsuleLabel.implicitHeight + Style.space(8)
                 radius: height / 2
-                color: fill
+                color: filled ? (Model.tint(modelData[2], root.lightPopup) || row.ink) : "transparent"
                 border.width: filled ? 0 : 1
                 border.color: Qt.rgba(row.ink.r, row.ink.g, row.ink.b, 0.25)
                 opacity: capsuleMouse.containsMouse ? 0.85 : 1
@@ -478,6 +508,7 @@ BarWidget {
           }
         }
       }
+    }
     }
   }
 }
