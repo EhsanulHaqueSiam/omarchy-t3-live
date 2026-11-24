@@ -18,12 +18,22 @@
   "heading.stale": "Waiting for an update",
   "finishedIn": "Finished in %1",
   "failedAfter": "Failed after %1",
-  "summary.needYou": { "one": "%1 needs you", "other": "%1 need you" },
-  "summary.failed": { "one": "%1 failed", "other": "%1 failed" },
-  "summary.working": { "one": "%1 working", "other": "%1 working" },
-  "summary.finishedFailed": { "one": "Finished, %1 failed", "other": "Finished, %1 failed" },
-  "summary.allFinished": { "one": "All finished", "other": "All finished" },
-  "summary.active": { "one": "%1 active", "other": "%1 active" },
+  "summary.needYou": {
+    "one": "%1 needs you",
+    "other": "%1 need you"
+  },
+  "summary.working": {
+    "one": "%1 working",
+    "other": "%1 working"
+  },
+  "summary.allFinished": {
+    "one": "All finished",
+    "other": "All finished"
+  },
+  "summary.active": {
+    "one": "%1 active",
+    "other": "%1 active"
+  },
   "step.command": "$ %1",
   "step.edit": "Editing %1",
   "step.tool": "Using %1",
@@ -48,5 +58,28 @@
   "toast.perm": "Approval needed: %1",
   "toast.still": "Still waiting on you: %1",
   "toast.done": "Finished: %1",
-  "toast.failed": "Failed: %1"
+  "toast.failed": "Failed: %1",
+  "limit": "Limit",
+  "resume": "Resume",
+  "resumeAtReset": "Resume at reset",
+  "snooze": "Snooze",
+  "wake": "Wake",
+  "cancel": "Cancel",
+  "resuming": "Resuming…",
+  "resumesAt": "Resumes %1",
+  "resetsAt": "Resets %1",
+  "limitReset": "Limit reset",
+  "snoozedUntil": "Snoozed until %1",
+  "toast.limited": "Usage limit: %1",
+  "toast.resumeFailed": "Couldn't resume: %1",
+  "limited": "Limit",
+  "summary.stopped": {
+    "one": "%1 stopped",
+    "other": "%1 stopped"
+  },
+  "summary.finishedStopped": {
+    "one": "Finished, %1 stopped",
+    "other": "Finished, %1 stopped"
+  },
+  "resumeAt": "On reset"
 }

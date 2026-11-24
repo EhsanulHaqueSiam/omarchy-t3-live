@@ -18,9 +18,11 @@ Click the pill for the list, headed like the live notification ("2 need you · 6
 - **Question**: what it asks, and an **Answer** button that opens the thread in T3 Code.
 - **Approval**: what it wants to do ("Wants to run: pnpm test"), and an **Approve** button that opens the thread.
 - **Waiting**: its machine stopped answering; it stays for 10 minutes or until the machine is back.
-- **Done / failed**: how long it took; these stay listed for 2 minutes.
+- **Failed**: the error, and **Resume**, which sends the thread T3's own "Continue where you left off." Failed threads stay listed for 12 hours, until you settle them in T3.
+- **Usage limit**: when it resets, and two choices: **On reset** resumes it the moment the limit resets, and **Snooze** hides it from the bar until then (**Wake** undoes it). If T3's own auto-resume is armed, the row says "Resumes 4:00 PM" and the plugin leaves it to T3. Once the limit has reset, **Resume** sends it on right away.
+- **Done**: how long it took; listed for 2 minutes.
 
-Anything that needs a decision opens in T3 Code itself, where you have the full thread.
+Anything that needs your input, a question or an approval, opens the thread in T3 Code itself, where you have its full context. Resuming and snoozing happen right in the list. A planned resume is kept in `~/.local/state/omarchy-t3-live/plan.json`, so it survives a restart. Resumes go through the `t3` CLI on the thread's own machine (over ssh for other machines).
 
 ## Notifications
 

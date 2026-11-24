@@ -6,10 +6,11 @@
 var UUID = /^[0-9a-fA-F-]{8,64}$/
 var HOST = /^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$/
 // The phases of T3's own mobile live notification, by our names:
-// starting, working (running), input, perm (approval), stale, done, failed.
-var STATES = ["starting", "working", "input", "perm", "stale", "done", "failed"]
+// starting, working (running), input, perm (approval), stale, done, failed,
+// plus limited: a run that stopped at a usage limit.
+var STATES = ["starting", "working", "input", "perm", "stale", "done", "failed", "limited"]
 var ASKING = ["input", "perm"]
-var TOASTS = ["input", "perm", "done", "failed"]
+var TOASTS = ["input", "perm", "done", "failed", "limited"]
 
 // "mac, box2" -> ["mac", "box2"]; drops names ssh could read as options.
 function parseHosts(text) {
@@ -40,8 +41,16 @@ function parseLine(line) {
     var pr = t.pr && typeof t.pr === "object" && Number.isInteger(t.pr.n) && t.pr.n > 0
       ? { n: t.pr.n, state: clip(t.pr.state, 20), checks: clip(t.pr.checks, 20), review: clip(t.pr.review, 40) }
       : null
+    var failure = t.failure && typeof t.failure === "object"
+      ? { cls: clip(t.failure["class"], 40), message: clip(t.failure.message, 200), resetAt: time(t.failure.resetAt) }
+      : null
+    var recovery = t.recovery && typeof t.recovery === "object"
+      ? { autoResume: t.recovery.autoResume === true, snooze: t.recovery.snooze === true }
+      : null
     threads.push({
       id: t.id,
+      failure: failure,
+      recovery: recovery,
       title: clip(t.title, 120),
       project: clip(t.project, 60),
       state: t.state,
@@ -57,12 +66,34 @@ function parseLine(line) {
 }
 
 function asking(t) { return ASKING.indexOf(t.state) !== -1 }
-function finished(t) { return t.state === "done" || t.state === "failed" }
+function stopped(t) { return t.state === "failed" || t.state === "limited" }
+function finished(t) { return t.state === "done" || stopped(t) }
 function live(t) { return t.state === "working" || t.state === "starting" }
 
-// Mobile's order: needs you, failed, working, then done and stale.
+// Mobile's order: needs you, failed (and limited), working, then done and stale.
 function rank(t) {
-  return asking(t) ? 0 : t.state === "failed" ? 1 : live(t) ? 2 : 3
+  return asking(t) ? 0 : stopped(t) ? 1 : live(t) ? 2 : 3
+}
+
+// Where a limited thread stands, given what the plugin planned for it
+// (plan: { resume, snooze } or undefined):
+//   "reset"  the limit has reset: it can resume now
+//   "t3"     T3 itself resumes it at the reset (its own auto-resume is armed)
+//   "armed"  the plugin resumes it at the reset
+//   "wait"   nothing planned yet
+function limitPhase(t, now, plan) {
+  var reset = t.failure ? t.failure.resetAt : 0
+  if (!reset || now >= reset) return "reset"
+  if (t.recovery && t.recovery.autoResume) return "t3"
+  if (plan && plan.resume) return "armed"
+  return "wait"
+}
+
+// A limited thread snoozed until its reset, by T3 or by the plugin, stays
+// out of the bar until then.
+function snoozed(t, now, plan) {
+  if (t.state !== "limited" || !t.failure || !(now < t.failure.resetAt)) return false
+  return !!((plan && plan.snooze) || (t.recovery && t.recovery.snooze))
 }
 
 // sources: { host: { env, threads } } -> one list in mobile's order; within
@@ -92,15 +123,18 @@ function markStale(threads) {
     .map(function(t) { return Object.assign({}, t, { state: "stale" }) })
 }
 
-// counts: { live, input, perm, stale }. One thread, or only working ones,
-// gets mobile's one-word chip as [i18n key, argument, phase]; a mix gets null,
-// and the bar shows each count.
+// counts: { live, input, perm, stale, failed, limited }. One thread, or only
+// working ones, gets mobile's one-word chip as [i18n key, argument, phase]; a
+// mix gets null, and the bar shows each count.
 function chip(c) {
-  var total = c.live + c.input + c.perm + c.stale
+  var failed = c.failed || 0, limited = c.limited || 0
+  var total = c.live + c.input + c.perm + c.stale + failed + limited
   if (total === 1) {
     if (c.live) return ["working", "", "working"]
     if (c.input) return ["answer", "", "input"]
     if (c.perm) return ["approve", "", "perm"]
+    if (failed) return ["failed", "", "failed"]
+    if (limited) return ["limit", "", "limited"]
     return ["waiting", "", "stale"]
   }
   if (total > 1 && total === c.live) return ["liveCount", c.live > 9 ? "9+" : String(c.live), "working"]
@@ -118,28 +152,29 @@ function face(c, flash, numbersOnly) {
   var w = numbersOnly ? null : chip(c)
   if (w) return [{ kind: "mark", phase: w[2] }, { kind: "word", key: w[0], arg: w[1], phase: w[2] === "working" ? "" : w[2] }]
   var out = [{ kind: "mark", phase: c.input || c.perm ? "working" : (c.live ? "working" : "") }]
-  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stale", "stale"]].forEach(function(p) {
-    if (!(c[p[0]] > 0)) return
+  var n = { live: c.live, input: c.input, perm: c.perm, stopped: (c.failed || 0) + (c.limited || 0), stale: c.stale }
+  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["stale", "stale"]].forEach(function(p) {
+    if (!(n[p[0]] > 0)) return
     if (out.length > 1 && !numbersOnly) out.push({ kind: "sep", phase: "" })
-    out.push({ kind: "num", arg: String(c[p[0]]), phase: p[1] })
+    out.push({ kind: "num", arg: String(n[p[0]]), phase: p[1] })
   })
   return out
 }
 
 // A row's glyph, by phase.
 function glyph(phase) {
-  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", done: "󰗠", failed: "󰅙", stale: "󰅐" }[phase] || "●"
+  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", done: "󰗠", failed: "󰅙", limited: "󰔟", stale: "󰅐" }[phase] || "●"
 }
 
 // The list's headline, mobile's summary: [i18n key, count].
 function summary(threads) {
   var attention = threads.filter(asking).length
-  var failed = count(threads, "failed")
+  var failed = threads.filter(stopped).length
   var active = threads.filter(function(t) { return !finished(t) }).length
   if (attention > 0) return ["summary.needYou", attention]
-  if (active > 0 && failed > 0) return ["summary.failed", failed]
+  if (active > 0 && failed > 0) return ["summary.stopped", failed]
   if (active > 0) return ["summary.working", active]
-  if (failed > 0) return ["summary.finishedFailed", failed]
+  if (failed > 0) return ["summary.finishedStopped", failed]
   return ["summary.allFinished", 0]
 }
 
@@ -149,7 +184,7 @@ function tint(phase, light) {
   var t = {
     starting: ["#7dd3fc", "#0284c7"], working: ["#7dd3fc", "#0284c7"],
     perm: ["#fcd34d", "#d97706"], input: ["#a5b4fc", "#4f46e5"],
-    failed: ["#fca5a5", "#dc2626"], done: ["#6ee7b7", "#059669"]
+    failed: ["#fca5a5", "#dc2626"], limited: ["#fca5a5", "#dc2626"], done: ["#6ee7b7", "#059669"]
   }[phase]
   return t ? t[light ? 1 : 0] : ""
 }

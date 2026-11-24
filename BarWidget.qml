@@ -20,9 +20,7 @@ BarWidget {
   readonly property var threads: service ? service.threads : []
   readonly property string flash: service ? service.flash : ""
   readonly property bool active: service ? service.activeCount > 0 : false
-  readonly property var counts: service
-    ? { live: service.liveCount, input: service.inputCount, perm: service.permCount, stale: service.staleCount }
-    : { live: 0, input: 0, perm: 0, stale: 0 }
+  readonly property var counts: service ? service.counts : { live: 0, input: 0, perm: 0, stale: 0, failed: 0, limited: 0 }
   readonly property var hosts: [""].concat(Model.parseHosts(root.setting("sshHosts", "")))
 
   readonly property string barFont: bar ? bar.fontFamily : Style.font.family
@@ -40,6 +38,43 @@ BarWidget {
   function openThread(t) {
     if (root.service) root.service.openThread(t)
     root.close()
+  }
+
+  // A row's buttons as [label, action, phase]. Anything that needs your
+  // judgement (a question, an approval) opens the thread in T3; stopped
+  // threads resume, wait for their limit, or snooze right here.
+  function rowActions(t) {
+    var s = root.service
+    if (!s) return []
+    if (t.state === "input") return [["answer", "open", "input"]]
+    if (t.state === "perm") return [["approve", "open", "perm"]]
+    if (s.isResuming(t)) return []
+    if (t.state === "failed") return [["resume", "resume", "working"]]
+    if (t.state !== "limited") return []
+    if (s.isSnoozed(t)) return s.planFor(t) && s.planFor(t).snooze ? [["wake", "unsnooze", ""]] : []
+    switch (s.limitPhase(t)) {
+      case "reset": return [["resume", "resume", "working"]]
+      case "armed": return [["cancel", "disarm", ""], ["snooze", "snooze", ""]]
+      case "t3": return [["snooze", "snooze", ""]]
+      default: return [["resumeAt", "arm", "working"], ["snooze", "snooze", ""]]
+    }
+  }
+
+  function act(t, action) {
+    var s = root.service
+    if (!s) return
+    switch (action) {
+      case "open": root.openThread(t); return
+      case "resume": s.resumeNow(t); return
+      case "arm": s.armResume(t); return
+      case "disarm": s.disarmResume(t); return
+      case "snooze": s.snooze(t); return
+      case "unsnooze": s.unsnooze(t); return
+    }
+  }
+
+  function clock(ms) {
+    return new Date(ms).toLocaleTimeString(Qt.locale(Commons.I18n.formatLocale), Locale.ShortFormat)
   }
 
   function luminance(c) { return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b }
@@ -197,7 +232,7 @@ BarWidget {
       // "2 need you  5 active", like the live notification's title.
       Row {
         readonly property var head: Model.summary(root.threads)
-        readonly property int activeTotal: root.threads.filter(function(t) { return t.state !== "done" && t.state !== "failed" }).length
+        readonly property int activeTotal: root.threads.filter(function(t) { return !Model.finished(t) }).length
         x: Style.space(4)
         spacing: Style.space(8)
         bottomPadding: Style.space(6)
@@ -234,7 +269,9 @@ BarWidget {
           required property var modelData
           required property int index
           readonly property string kind: modelData.state
-          readonly property bool asking: kind === "input" || kind === "perm"
+          readonly property var actions: root.rowActions(modelData)
+          readonly property bool asking: actions.length > 0
+          readonly property bool dimmed: !!root.service && root.service.isSnoozed(modelData)
           readonly property color tint: Model.tint(kind, root.lightPopup) || Commons.Color.popups.text
           readonly property color ink: Commons.Color.popups.text
           readonly property string detail: {
@@ -245,7 +282,20 @@ BarWidget {
                 return p[1] !== "" ? strings.t(p[0]).arg(p[1]) : strings.t(p[0])
               case "stale": return strings.t("heading.stale")
               case "done": return strings.t("finishedIn").arg(Model.elapsed(modelData.ended - modelData.since))
-              case "failed": return strings.t("failedAfter").arg(Model.elapsed(modelData.ended - modelData.since))
+            }
+            if (kind === "failed" || kind === "limited") {
+              if (root.service && root.service.isResuming(modelData)) return strings.t("resuming")
+              var reset = modelData.failure ? modelData.failure.resetAt : 0
+              if (kind === "limited" && root.service) {
+                if (root.service.isSnoozed(modelData)) return strings.t("snoozedUntil").arg(root.clock(reset))
+                switch (root.service.limitPhase(modelData)) {
+                  case "reset": return strings.t("limitReset")
+                  case "t3":
+                  case "armed": return strings.t("resumesAt").arg(root.clock(reset))
+                  default: return strings.t("resetsAt").arg(root.clock(reset))
+                }
+              }
+              return (modelData.failure && modelData.failure.message) || strings.t("failedAfter").arg(Model.elapsed(modelData.ended - modelData.since))
             }
             var s = Model.stepText(modelData.step)
             if (s[0] === "") return kind === "starting" ? strings.t("heading.starting") : ""
@@ -261,7 +311,7 @@ BarWidget {
           width: list.width
           height: content.implicitHeight + Style.space(14)
 
-          opacity: popup.revealed ? 1 : 0
+          opacity: popup.revealed ? (dimmed ? 0.5 : 1) : 0
           transform: Translate {
             y: popup.revealed ? 0 : -Style.space(4)
             Behavior on y {
@@ -323,7 +373,7 @@ BarWidget {
             id: content
             x: mark.x + mark.width + Style.space(9)
             anchors.verticalCenter: parent.verticalCenter
-            width: (row.asking ? button.x : trailing.x) - x - Style.space(10)
+            width: (row.asking ? buttons.x : trailing.x) - x - Style.space(10)
             spacing: Style.space(1)
 
             Text {
@@ -340,13 +390,13 @@ BarWidget {
             Text {
               visible: row.detail !== ""
               width: parent.width
-              wrapMode: row.asking ? Text.Wrap : Text.NoWrap
-              maximumLineCount: row.asking ? 2 : 1
+              wrapMode: row.kind === "input" || row.kind === "perm" ? Text.Wrap : Text.NoWrap
+              maximumLineCount: row.kind === "input" || row.kind === "perm" ? 2 : 1
               elide: Text.ElideRight
               textFormat: Text.PlainText
               text: row.detail
-              color: row.kind === "failed" ? row.tint : row.ink
-              opacity: row.kind === "failed" ? 1 : 0.82
+              color: row.kind === "failed" || row.kind === "limited" ? row.tint : row.ink
+              opacity: row.kind === "failed" || row.kind === "limited" ? 1 : 0.82
               font.family: root.barFont
               font.pixelSize: Style.font.bodySmall
             }
@@ -371,6 +421,7 @@ BarWidget {
             textFormat: Text.PlainText
             text: row.kind === "done" ? strings.t("done")
               : row.kind === "failed" ? strings.t("failed")
+              : row.kind === "limited" ? strings.t("limit")
               : row.kind === "stale" ? "" : Model.elapsed(root.now - row.modelData.since)
             color: row.kind === "done" || row.kind === "failed" ? row.tint : row.ink
             font.family: root.barFont
@@ -379,38 +430,50 @@ BarWidget {
             font.features: { "tnum": 1 }
           }
 
-          Rectangle {
-            id: button
-            readonly property bool hovered: buttonMouse.containsMouse
+          Row {
+            id: buttons
             visible: row.asking
             x: row.width - width - Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
-            width: buttonLabel.implicitWidth + Style.space(20)
-            height: buttonLabel.implicitHeight + Style.space(8)
-            radius: height / 2
-            color: row.tint
-            opacity: hovered ? 0.85 : 1
-            scale: buttonMouse.pressed ? 0.96 : 1
-            Behavior on scale { NumberAnimation { duration: Style.duration(100); easing.type: Easing.OutCubic } }
+            spacing: Style.space(5)
 
-            Text {
-              id: buttonLabel
-              anchors.centerIn: parent
-              textFormat: Text.PlainText
-              text: strings.t(row.kind === "perm" ? "approve" : "answer")
-              color: root.lightPopup ? "#ffffff" : "#000000"
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-            }
+            Repeater {
+              model: row.actions
+              delegate: Rectangle {
+                id: capsule
+                required property var modelData
+                // A filled capsule acts; a plain one (Snooze, Cancel, Wake) is the quiet way out.
+                readonly property bool filled: modelData[2] !== ""
+                readonly property color fill: filled ? (Model.tint(modelData[2], root.lightPopup) || row.ink) : "transparent"
+                width: capsuleLabel.implicitWidth + Style.space(filled ? 20 : 14)
+                height: capsuleLabel.implicitHeight + Style.space(8)
+                radius: height / 2
+                color: fill
+                border.width: filled ? 0 : 1
+                border.color: Qt.rgba(row.ink.r, row.ink.g, row.ink.b, 0.25)
+                opacity: capsuleMouse.containsMouse ? 0.85 : 1
+                scale: capsuleMouse.pressed ? 0.96 : 1
+                Behavior on scale { NumberAnimation { duration: Style.duration(100); easing.type: Easing.OutCubic } }
 
-            MouseArea {
-              id: buttonMouse
-              anchors.fill: parent
-              enabled: row.asking
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.openThread(row.modelData)
+                Text {
+                  id: capsuleLabel
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: strings.t(capsule.modelData[0])
+                  color: capsule.filled ? (root.lightPopup ? "#ffffff" : "#000000") : row.ink
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: capsule.filled
+                }
+
+                MouseArea {
+                  id: capsuleMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.act(row.modelData, capsule.modelData[1])
+                }
+              }
             }
           }
         }

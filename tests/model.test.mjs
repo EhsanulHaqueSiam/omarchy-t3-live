@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -60,6 +60,40 @@ assert.deepEqual(M.chip(c(12)), ["liveCount", "9+", "working"])
 assert.equal(M.chip(c(2, 1)), null)
 assert.equal(M.chip(c(0, 1, 1)), null)
 
+// Failed and limited threads: failure and T3's own recovery are parsed and
+// clipped; junk becomes null.
+const lim = M.parseLine(JSON.stringify({ env, threads: [
+  { id, state: "limited", title: "x", since: "2026-11-24T10:00:00Z", ended: "2026-11-24T10:05:00Z",
+    failure: { class: "usage_limit", message: "m".repeat(500), resetAt: "2026-11-24T12:00:00Z" }, recovery: { autoResume: true, snooze: "yes" } },
+  { id: id2, state: "failed", title: "y", failure: "nope", recovery: 7 },
+] })).threads
+assert.equal(lim[0].failure.cls, "usage_limit")
+assert.equal(lim[0].failure.message.length, 200)
+assert.deepEqual(lim[0].recovery, { autoResume: true, snooze: false })
+assert.equal(lim[1].failure, null)
+assert.equal(lim[1].recovery, null)
+
+// Where a limited thread stands, and whether it is snoozed out of the bar.
+const reset = Date.parse("2026-11-24T12:00:00Z"), early = reset - 60000, late = reset + 1
+const L = (recovery = null) => ({ state: "limited", failure: { cls: "usage_limit", resetAt: reset }, recovery })
+assert.equal(M.limitPhase(L(), late, undefined), "reset")
+assert.equal(M.limitPhase(L({ autoResume: true, snooze: false }), early, { resume: true }), "t3")
+assert.equal(M.limitPhase(L(), early, { resume: true }), "armed")
+assert.equal(M.limitPhase(L(), early, undefined), "wait")
+assert.equal(M.limitPhase({ state: "limited", failure: { resetAt: 0 } }, early), "reset")
+assert.equal(M.snoozed(L(), early, { snooze: true }), true)
+assert.equal(M.snoozed(L({ autoResume: false, snooze: true }), early), true)
+assert.equal(M.snoozed(L(), late, { snooze: true }), false)
+assert.equal(M.snoozed(L(), early, undefined), false)
+assert.equal(M.snoozed({ state: "failed", failure: { resetAt: reset } }, early, { snooze: true }), false)
+
+// One failed or limited thread says so; in a mix they share one red count.
+assert.deepEqual(M.chip({ live: 0, input: 0, perm: 0, stale: 0, failed: 1, limited: 0 }), ["failed", "", "failed"])
+assert.deepEqual(M.chip({ live: 0, input: 0, perm: 0, stale: 0, failed: 0, limited: 1 }), ["limit", "", "limited"])
+const mixStop = M.face({ live: 2, input: 0, perm: 0, stale: 0, failed: 1, limited: 1 }, "").filter(x => x.kind === "num")
+assert.deepEqual(mixStop.map(x => x.arg + ":" + x.phase), ["2:working", "2:failed"])
+assert.deepEqual(M.summary([t("a", "working", 1), t("b", "limited", 1, 2)]), ["summary.stopped", 1])
+
 // The island face: one word when chip() gives one, colored counts for a mix,
 // the finish word during a flash, and numbers only on a vertical bar.
 const text = f => f.map(x => x.kind === "mark" ? "T3" : x.kind === "sep" ? "·" : x.kind === "glyph" ? "*" : x.kind === "word" ? x.key + (x.arg ? "(" + x.arg + ")" : "") : x.arg).join(" ")
@@ -77,9 +111,9 @@ assert.equal(M.glyph("input"), "󰋗")
 
 // The list's headline, mobile's summary.
 assert.deepEqual(M.summary([t("a", "input", 1), t("b", "perm", 1), t("c", "working", 1)]), ["summary.needYou", 2])
-assert.deepEqual(M.summary([t("a", "working", 1), t("b", "failed", 1, 2)]), ["summary.failed", 1])
+assert.deepEqual(M.summary([t("a", "working", 1), t("b", "failed", 1, 2)]), ["summary.stopped", 1])
 assert.deepEqual(M.summary([t("a", "working", 1), t("b", "starting", 1)]), ["summary.working", 2])
-assert.deepEqual(M.summary([t("b", "failed", 1, 2), t("c", "done", 1, 2)]), ["summary.finishedFailed", 1])
+assert.deepEqual(M.summary([t("b", "failed", 1, 2), t("c", "done", 1, 2)]), ["summary.finishedStopped", 1])
 assert.deepEqual(M.summary([t("c", "done", 1, 2)]), ["summary.allFinished", 0])
 
 // T3's phase colors, dark and light; stale has none.

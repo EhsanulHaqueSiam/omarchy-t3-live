@@ -2,13 +2,18 @@
 # Streams this machine's live T3 Code threads, one JSON line per change:
 #   {"env":"<environmentId>","threads":[{
 #     "id","title","project",
-#     "state",      starting | working | input (a question) | perm (an approval) | done | failed
+#     "state",      starting | working | input (a question) | perm (an approval) |
+#                   done | failed | limited (stopped at a usage limit)
+#     "failure",    {class, message, retryable, resetAt} for failed and limited
+#     "recovery",   T3's own {autoResume, snooze} for this limit, when armed
 #     "askKind",    the pending request's kind, for input and perm
 #     "question",   what an input thread asks
 #     "step",       [type, detail] of a working thread's latest item
 #     "pr",         {n, state, checks, review} of its newest pull request
 #     "since",      when the run (or the pending request) started
-#     "ended"}]}    when a done or failed run ended; those stay listed for 2 minutes
+#     "ended"}]}    when the run ended. Done threads stay listed for 2 minutes;
+#                   failed and limited ones for 12 hours, until they are settled
+#                   or resumed, and not while T3 has them snoozed
 # Run it locally with `sh feed.sh`, or on another machine with
 # `ssh <host> sh -s < feed.sh`. Pass `once` to print the current state and exit.
 # It only reads T3's database, opened read-only.
@@ -26,18 +31,19 @@ WITH live AS (
   WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
   GROUP BY thread_id
 ), ended AS (
-  -- SQLite takes the bare columns from the row holding max(completed_at).
-  SELECT thread_id, status, coalesce(json_extract(payload_json, '\$.startedAt'), requested_at) AS since,
-         max(completed_at) AS ended
-  FROM orchestration_v2_projection_runs
-  WHERE status IN ('completed', 'failed')
-    AND completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds')
-    AND thread_id NOT IN (SELECT thread_id FROM live)
-  GROUP BY thread_id
+  -- Only a thread's latest run counts: a failure an earlier run had is history.
+  SELECT r.run_id, r.thread_id, r.status, coalesce(json_extract(r.payload_json, '\$.startedAt'), r.requested_at) AS since,
+         r.completed_at AS ended
+  FROM orchestration_v2_projection_runs r
+  WHERE r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
+                     WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
+    AND ((r.status = 'completed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-120 seconds'))
+      OR (r.status = 'failed' AND r.completed_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')))
+    AND r.thread_id NOT IN (SELECT thread_id FROM live)
 ), act AS (
-  SELECT thread_id, since, NULL AS ended, NULL AS outcome, running FROM live
+  SELECT thread_id, since, NULL AS ended, NULL AS outcome, running, NULL AS run_id FROM live
   UNION ALL
-  SELECT thread_id, since, ended, status, 1 FROM ended
+  SELECT thread_id, since, ended, status, 1, run_id FROM ended
 ), ask AS (
   SELECT thread_id, runtime_request_id, kind, min(created_at) AS since
   FROM orchestration_v2_projection_runtime_requests
@@ -45,6 +51,15 @@ WITH live AS (
   GROUP BY thread_id
 ), rows AS (
   SELECT t.thread_id AS id, t.title, coalesce(p.title, '') AS project,
+    (SELECT json_extract(i.payload_json, '\$.failure')
+      FROM orchestration_v2_projection_turn_items i
+      WHERE x.outcome = 'failed' AND i.thread_id = t.thread_id AND i.run_id = x.run_id
+        AND i.type = 'error' AND i.status = 'failed'
+      ORDER BY i.ordinal DESC LIMIT 1) AS failure,
+    CASE WHEN json_extract(t.payload_json, '\$.limitRecovery.runId') = x.run_id
+      THEN json_object('autoResume', json(CASE WHEN json_extract(t.payload_json, '\$.limitRecovery.autoResume') THEN 'true' ELSE 'false' END),
+                       'snooze', json(CASE WHEN json_extract(t.payload_json, '\$.limitRecovery.snooze') THEN 'true' ELSE 'false' END))
+    END AS recovery,
     CASE
       WHEN x.outcome = 'completed' THEN 'done'
       WHEN x.outcome = 'failed' THEN 'failed'
@@ -85,10 +100,18 @@ WITH live AS (
   LEFT JOIN projection_projects p ON p.project_id = t.project_id
   WHERE t.deleted_at IS NULL AND t.archived_at IS NULL
     AND coalesce(json_extract(t.payload_json, '\$.lineage.relationshipToParent'), '') <> 'subagent'
+    -- A failed thread leaves once settled, and hides while T3 has it snoozed.
+    AND (x.outcome IS NOT 'failed' OR (json_extract(t.payload_json, '\$.settledAt') IS NULL
+      AND coalesce(json_extract(t.payload_json, '\$.snoozedUntil'), '') < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
   LIMIT 50
 )
 SELECT json_group_array(json_object('id', id, 'title', substr(title, 1, 120),
-  'project', substr(project, 1, 60), 'state', state, 'askKind', askKind,
+  'project', substr(project, 1, 60),
+  'state', CASE WHEN state = 'failed' AND json_extract(failure, '\$.class') = 'usage_limit' THEN 'limited' ELSE state END,
+  'askKind', askKind,
+  'failure', CASE WHEN failure IS NULL THEN NULL ELSE json_object('class', json_extract(failure, '\$.class'),
+    'message', substr(json_extract(failure, '\$.message'), 1, 200), 'resetAt', json_extract(failure, '\$.resetAt')) END,
+  'recovery', json(recovery),
   'question', substr(question, 1, 300), 'step', json(step), 'pr', json(pr),
   'since', since, 'ended', ended)) FROM rows;"
 
