@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint limitPhase snoozed stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine owner planExpired merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -54,7 +54,28 @@ const c = (live, input = 0, perm = 0, stale = 0) => ({ live, input, perm, stale 
 assert.deepEqual(M.chip(c(1)), ["working", "", "working"])
 assert.deepEqual(M.chip(c(0, 1)), ["answer", "", "input"])
 assert.deepEqual(M.chip(c(0, 0, 1)), ["approve", "", "perm"])
-assert.deepEqual(M.chip(c(0, 0, 0, 1)), ["waiting", "", "stale"])
+assert.deepEqual(M.chip(c(0, 0, 0, 1)), ["offline", "", "stale"])
+
+// Waiting (T3's sidebar word: a watch, background work, or another thread):
+// its own word, "N waiting" when alone, a muted count in a mix, ranked after
+// working and before done, and never a toast.
+const w = (n, live = 0) => ({ live, input: 0, perm: 0, waiting: n, stale: 0 })
+assert.deepEqual(M.chip(w(1)), ["waiting", "", "waiting"])
+assert.deepEqual(M.chip(w(2)), ["waitingCount", "2", "waiting"])
+assert.equal(M.chip(w(1, 2)), null)
+assert.deepEqual(M.face(w(1, 2), "").filter(x => x.kind === "num").map(x => x.phase + x.arg), ["working2", "waiting1"])
+// The two grays tell themselves apart by glyph; vertical bars stay numbers only.
+assert.deepEqual(M.face({ live: 1, input: 0, perm: 0, waiting: 1, stale: 1 }, "").filter(x => x.kind === "num").map(x => x.icon), ["", M.glyph("waiting"), M.glyph("stale")])
+assert.equal(M.face({ live: 1, input: 0, perm: 0, waiting: 1, stale: 0 }, "", true).filter(x => x.icon).length, 0)
+assert.deepEqual(M.tooltip(w(1, 2)), [["tip.working", 2], ["tip.waiting", 1]])
+assert.deepEqual(M.summary([t("a", "waiting", 1), t("b", "done", 1, 2)]), ["summary.waiting", 1])
+assert.deepEqual(M.summary([t("a", "waiting", 1), t("b", "working", 1)]), ["summary.working", 1])
+assert.deepEqual(M.merge({ "": { env, threads: [t("d", "done", 1, 9), t("w", "waiting", 1), t("x", "working", 1)] } }).map(x => x.id), ["x", "w", "d"])
+assert.equal(M.parseLine(JSON.stringify({ env, threads: [{ id, state: "waiting", step: ["watch_pr", "76"] }] })).threads[0].state, "waiting")
+assert.deepEqual(M.transitions({}, [t("w", "waiting", 1)]), [])
+assert.deepEqual(M.stepText({ type: "watch_pr", detail: "76" }), ["step.watchPr", "76"])
+assert.deepEqual(M.stepText({ type: "wait_thread", detail: "" }), ["step.waitThread", ""])
+assert.deepEqual(M.stepText({ type: "background", detail: "" }), ["step.backgroundAny", ""])
 assert.deepEqual(M.chip(c(3)), ["liveCount", "3", "working"])
 assert.deepEqual(M.chip(c(12)), ["liveCount", "9+", "working"])
 assert.equal(M.chip(c(2, 1)), null)
@@ -94,6 +115,80 @@ const mixStop = M.face({ live: 2, input: 0, perm: 0, stale: 0, failed: 1, limite
 assert.deepEqual(mixStop.map(x => x.arg + ":" + x.phase), ["2:working", "2:failed"])
 assert.deepEqual(M.summary([t("a", "working", 1), t("b", "limited", 1, 2)]), ["summary.stopped", 1])
 
+// Every state's buttons: only what that state needs.
+const A = (state, ctx = {}) => M.actions({ state }, Object.assign({ phase: "wait", snoozed: false, ownSnooze: false, resuming: false }, ctx)).map(x => x[0]).join(",")
+for (const s of ["starting", "working", "stale", "done"]) assert.equal(A(s), "", s)
+assert.equal(A("input"), "answer")
+assert.equal(A("perm"), "approve")
+assert.equal(A("failed"), "resume,dismiss")
+assert.equal(A("failed", { resuming: true }), "")
+assert.equal(A("limited", { phase: "wait" }), "resumeAt,snooze")
+assert.equal(A("limited", { phase: "armed" }), "cancel,snooze")
+assert.equal(A("limited", { phase: "t3" }), "snooze")
+assert.equal(A("limited", { phase: "reset" }), "resume,dismiss")
+assert.equal(A("limited", { phase: "wait", snoozed: true, ownSnooze: true }), "wake")
+assert.equal(A("limited", { phase: "wait", snoozed: true, ownSnooze: false }), "")
+assert.equal(A("limited", { phase: "reset", resuming: true }), "")
+// Opening is the only thing a question or approval offers, whatever else is true.
+assert.equal(A("input", { resuming: true, snoozed: true }), "answer")
+for (const [, , phase] of [].concat(...["input", "perm", "failed"].map(s => M.actions({ state: s }, { phase: "wait" }))))
+  assert.ok(["input", "perm", "working", ""].includes(phase))
+
+// Dismissed: a stopped thread hides until it stops again.
+assert.equal(M.dismissed({ state: "failed", ended: 5 }, { dismissed: 5 }), true)
+assert.equal(M.dismissed({ state: "failed", ended: 9 }, { dismissed: 5 }), false)
+assert.equal(M.dismissed({ state: "working", ended: 5 }, { dismissed: 5 }), false)
+assert.equal(M.dismissed({ state: "failed", ended: 5 }, undefined), false)
+
+// Approval text comes from the approval's own item.
+assert.deepEqual(M.permText({ askKind: "command", permDetail: "rm -rf build" }), ["perm.commandRun", "rm -rf build"])
+assert.deepEqual(M.permText({ askKind: "file-change", permDetail: "/a/b/Hero.tsx" }), ["perm.editFile", "Hero.tsx"])
+assert.deepEqual(M.permText({ askKind: "command", permDetail: "", step: { type: "command_execution", detail: "other" } }), ["perm.command", ""])
+
+// The tooltip names each count.
+assert.deepEqual(M.tooltip({ live: 3, input: 1, perm: 0, stale: 0, failed: 1, limited: 1 }), [["tip.working", 3], ["tip.input", 1], ["tip.stopped", 2]])
+
+// T3 owns a limit it armed itself: no Resume before or after its reset.
+assert.equal(M.limitPhase(L({ autoResume: true, snooze: false }), late, undefined), "t3reset")
+assert.equal(A("limited", { phase: "t3reset" }), "")
+
+// The headline: working means running now; stale-only and snoozed-only say so.
+assert.deepEqual(M.summary([t("s", "stale", 1)], 0), ["summary.stale", 1])
+assert.deepEqual(M.summary([], 2), ["summary.snoozed", 2])
+assert.deepEqual(M.summary([t("w", "working", 1), t("s", "stale", 1)], 0), ["summary.working", 1])
+
+// Theme colors: too-dim colors are lifted to read; button labels pick black or white.
+const pal = { red: "#c38b7b", green: "#87a9b0", yellow: "#6B5E73", blue: "#b59790", magenta: "#c4d8e2", cyan: "#a5a0b6", muted: "#584e51", fg: "#e0e0e0", bg: "#101315" }
+assert.ok(M.contrast(M.readable(pal.yellow, pal.bg, pal.fg), pal.bg) >= 3)
+assert.equal(M.readable("#7dd3fc", "#000000", "#ffffff"), "#7dd3fc")
+assert.equal(M.inkOn("#fcd34d"), "#000000")
+assert.equal(M.inkOn("#4f46e5"), "#ffffff")
+assert.equal(M.phaseColor("input", pal), pal.magenta)
+assert.equal(M.phaseColor("limited", pal), pal.red)
+assert.equal(M.projectColor("indigo", pal), pal.magenta)
+assert.equal(M.projectColor("sky", pal), pal.blue)
+assert.equal(M.projectColor("gray", pal), pal.muted)
+assert.deepEqual(M.prLook({ state: "merged" }, pal), ["\uf419", pal.magenta])
+assert.deepEqual(M.prLook({ state: "open", checks: "failure" }, pal), ["\uf407", pal.red])
+assert.equal(M.prLook(null, pal), null)
+
+// T3's vivid palette by default, its darker stops on a light surface.
+assert.equal(M.t3Palette(false).yellow, "#fcd34d")
+assert.equal(M.t3Palette(true).magenta, "#4f46e5")
+assert.ok(M.luminance("#ffffff") > 0.9 && M.luminance("#101315") < 0.1)
+
+// Small text reaches 4.5:1; Qt's translucent "#aarrggbb" still counts.
+assert.ok(M.contrast(M.readable("#584e51", "#101315", "#e0e0e0", 4.5), "#101315") >= 4.5)
+assert.ok(M.contrast(M.readable(pal.yellow, "#cc101315", pal.fg), pal.bg) >= 3)
+// Toast text can't turn into markup, however many times it is decoded.
+assert.equal(M.toastText("<b>x</b>"), "\u2039b\u203ax\u2039/b\u203a")
+for (const s of ["&lt;b&gt;x&lt;/b&gt;", "&#60;b&#62;", "&#x3c;a href=&quot;u&quot;&#x3e;", "&amp;lt;b&amp;gt;"])
+  assert.ok(!/&#?[A-Za-z0-9]+;/.test(M.toastText(s)), s)
+
+// New fields from another machine are checked too.
+const extra = M.parseLine(JSON.stringify({ env, threads: [{ id, state: "working", title: "x", projectColor: "Blue; rm", issue: "#40471" }, { id: id2, state: "working", title: "y", projectColor: "indigo", issue: "<b>1</b>" }] })).threads
+assert.deepEqual(extra.map(x => [x.projectColor, x.issue]), [["", "#40471"], ["indigo", ""]])
+
 // The island face: one word when chip() gives one, colored counts for a mix,
 // the finish word during a flash, and numbers only on a vertical bar.
 const text = f => f.map(x => x.kind === "mark" ? "T3" : x.kind === "sep" ? "·" : x.kind === "glyph" ? "*" : x.kind === "word" ? x.key + (x.arg ? "(" + x.arg + ")" : "") : x.arg).join(" ")
@@ -116,11 +211,6 @@ assert.deepEqual(M.summary([t("a", "working", 1), t("b", "starting", 1)]), ["sum
 assert.deepEqual(M.summary([t("b", "failed", 1, 2), t("c", "done", 1, 2)]), ["summary.finishedStopped", 1])
 assert.deepEqual(M.summary([t("c", "done", 1, 2)]), ["summary.allFinished", 0])
 
-// T3's phase colors, dark and light; stale has none.
-assert.equal(M.tint("working", false), "#7dd3fc")
-assert.equal(M.tint("input", true), "#4f46e5")
-assert.equal(M.tint("perm", false), "#fcd34d")
-assert.equal(M.tint("stale", false), "")
 
 // Transitions: a host's next snapshot toasts what newly waits or finishes, once.
 const before = [t("a", "working", 1), t("b", "input", 2)]
@@ -142,7 +232,6 @@ assert.equal(M.prText({ state: "open", checks: "success", review: "CHANGES_REQUE
 assert.equal(M.prText(null), "")
 
 // Permission text names the command when the latest step is that command.
-assert.deepEqual(M.permText({ askKind: "command", step: { type: "command_execution", detail: "rm -rf build" } }), ["perm.commandRun", "rm -rf build"])
 assert.deepEqual(M.permText({ askKind: "command", step: null }), ["perm.command", ""])
 assert.deepEqual(M.permText({ askKind: "file-change" }), ["perm.edit", ""])
 assert.deepEqual(M.permText({ askKind: "permission" }), ["perm.other", ""])
@@ -156,5 +245,19 @@ assert.equal(M.elapsed(134000), "2:14")
 assert.equal(M.elapsed(3725000), "1:02:05")
 assert.equal(M.elapsed(-5), "0:00")
 assert.equal(M.threadUrl({ env, id }), `t3code://threads/${env}/${id}`)
+
+// One machine reached under two names: a live route keeps it, a stale one gives way.
+const routes = { mac: { env, threads: [] }, "mac-wan": { env, threads: [] }, box: { env: id, threads: [] } }
+assert.deepEqual(M.owner(routes, {}, "mac", env), { host: "mac-wan", live: true })
+assert.deepEqual(M.owner(routes, { "mac-wan": 1 }, "mac", env), { host: "mac-wan", live: false })
+assert.equal(M.owner(routes, {}, "box", id), null)
+assert.equal(M.owner({ mac: null }, {}, "x", env), null)
+
+// Plans end 13 h after their stop or reset, whatever host showed them.
+const H = 3600000
+assert.equal(M.planExpired({ resetAt: 10 * H, ended: 1 * H, dismissed: 0 }, 22 * H), false)
+assert.equal(M.planExpired({ resetAt: 10 * H, ended: 1 * H, dismissed: 0 }, 24 * H), true)
+assert.equal(M.planExpired({ resetAt: 0, ended: 0, dismissed: 5 * H }, 17 * H), false)
+assert.equal(M.planExpired({ resetAt: 0, ended: 0, dismissed: 5 * H }, 19 * H), true)
 
 console.log("model tests passed")

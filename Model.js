@@ -7,8 +7,10 @@ var UUID = /^[0-9a-fA-F-]{8,64}$/
 var HOST = /^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$/
 // The phases of T3's own mobile live notification, by our names:
 // starting, working (running), input, perm (approval), stale, done, failed,
-// plus limited: a run that stopped at a usage limit.
-var STATES = ["starting", "working", "input", "perm", "stale", "done", "failed", "limited"]
+// plus limited (a run that stopped at a usage limit) and waiting (the
+// sidebar's "Waiting": its turn ended but it still watches a pull request or
+// has background work, or it waits on another thread).
+var STATES = ["starting", "working", "input", "perm", "waiting", "stale", "done", "failed", "limited"]
 var ASKING = ["input", "perm"]
 var TOASTS = ["input", "perm", "done", "failed", "limited"]
 
@@ -53,8 +55,11 @@ function parseLine(line) {
       recovery: recovery,
       title: clip(t.title, 120),
       project: clip(t.project, 60),
+      projectColor: /^[a-z]{3,16}$/.test(t.projectColor) ? t.projectColor : "",
+      issue: /^#?[A-Za-z0-9_.-]{1,24}$/.test(t.issue) ? t.issue : "",
       state: t.state,
       askKind: clip(t.askKind, 40),
+      permDetail: clip(t.permDetail, 160),
       question: clip(t.question, 300),
       step: step,
       pr: pr,
@@ -70,21 +75,24 @@ function stopped(t) { return t.state === "failed" || t.state === "limited" }
 function finished(t) { return t.state === "done" || stopped(t) }
 function live(t) { return t.state === "working" || t.state === "starting" }
 
-// Mobile's order: needs you, failed (and limited), working, then done and stale.
+// Mobile's order: needs you, failed (and limited), working, waiting, then
+// done and stale.
 function rank(t) {
-  return asking(t) ? 0 : stopped(t) ? 1 : live(t) ? 2 : 3
+  return asking(t) ? 0 : stopped(t) ? 1 : live(t) ? 2 : t.state === "waiting" ? 3 : 4
 }
 
 // Where a limited thread stands, given what the plugin planned for it
 // (plan: { resume, snooze } or undefined):
 //   "reset"  the limit has reset: it can resume now
-//   "t3"     T3 itself resumes it at the reset (its own auto-resume is armed)
 //   "armed"  the plugin resumes it at the reset
 //   "wait"   nothing planned yet
+//   "t3" / "t3reset" T3 itself resumes it at the reset (its own auto-resume
+//                    is armed), before / after the reset: the plugin never sends
 function limitPhase(t, now, plan) {
   var reset = t.failure ? t.failure.resetAt : 0
-  if (!reset || now >= reset) return "reset"
-  if (t.recovery && t.recovery.autoResume) return "t3"
+  var due = !reset || now >= reset
+  if (t.recovery && t.recovery.autoResume) return due ? "t3reset" : "t3"
+  if (due) return "reset"
   if (plan && plan.resume) return "armed"
   return "wait"
 }
@@ -98,6 +106,15 @@ function snoozed(t, now, plan) {
 
 // sources: { host: { env, threads } } -> one list in mobile's order; within
 // a group, the longest waiting question first, otherwise the newest.
+// Who already shows the machine (env) that `host` also reaches: a live host
+// keeps it ({ host, live: true }); a stale one gives way ({ host, live: false }).
+function owner(sources, stale, host, env) {
+  var others = Object.keys(sources).filter(function(h) { return h !== host && sources[h] && sources[h].env === env })
+  var live = others.filter(function(h) { return !(h in stale) })
+  if (live.length) return { host: live[0], live: true }
+  return others.length ? { host: others[0], live: false } : null
+}
+
 function merge(sources) {
   var all = []
   Object.keys(sources).forEach(function(host) {
@@ -123,21 +140,24 @@ function markStale(threads) {
     .map(function(t) { return Object.assign({}, t, { state: "stale" }) })
 }
 
-// counts: { live, input, perm, stale, failed, limited }. One thread, or only
-// working ones, gets mobile's one-word chip as [i18n key, argument, phase]; a
-// mix gets null, and the bar shows each count.
+// counts: { live, input, perm, waiting, stale, failed, limited }. One thread,
+// or only working (or only waiting) ones, gets mobile's one-word chip as
+// [i18n key, argument, phase]; a mix gets null, and the bar shows each count.
 function chip(c) {
-  var failed = c.failed || 0, limited = c.limited || 0
-  var total = c.live + c.input + c.perm + c.stale + failed + limited
+  var failed = c.failed || 0, limited = c.limited || 0, waiting = c.waiting || 0
+  var total = c.live + c.input + c.perm + waiting + c.stale + failed + limited
+  var n = function(v) { return v > 9 ? "9+" : String(v) }
   if (total === 1) {
     if (c.live) return ["working", "", "working"]
     if (c.input) return ["answer", "", "input"]
     if (c.perm) return ["approve", "", "perm"]
     if (failed) return ["failed", "", "failed"]
     if (limited) return ["limit", "", "limited"]
-    return ["waiting", "", "stale"]
+    if (waiting) return ["waiting", "", "waiting"]
+    return ["offline", "", "stale"]
   }
-  if (total > 1 && total === c.live) return ["liveCount", c.live > 9 ? "9+" : String(c.live), "working"]
+  if (total > 1 && total === c.live) return ["liveCount", n(c.live), "working"]
+  if (total > 1 && total === waiting) return ["waitingCount", n(waiting), "waiting"]
   return null
 }
 
@@ -151,42 +171,175 @@ function face(c, flash, numbersOnly) {
     : [{ kind: "mark", phase: flash }, { kind: "word", key: flash, arg: "", phase: flash }]
   var w = numbersOnly ? null : chip(c)
   if (w) return [{ kind: "mark", phase: w[2] }, { kind: "word", key: w[0], arg: w[1], phase: w[2] === "working" ? "" : w[2] }]
-  var out = [{ kind: "mark", phase: c.input || c.perm ? "working" : (c.live ? "working" : "") }]
-  var n = { live: c.live, input: c.input, perm: c.perm, stopped: (c.failed || 0) + (c.limited || 0), stale: c.stale }
-  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["stale", "stale"]].forEach(function(p) {
+  var out = [{ kind: "mark", phase: c.live || c.input || c.perm ? "working" : "" }]
+  var n = { live: c.live, input: c.input, perm: c.perm, stopped: (c.failed || 0) + (c.limited || 0), waiting: c.waiting || 0, stale: c.stale }
+  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["waiting", "waiting"], ["stale", "stale"]].forEach(function(p) {
     if (!(n[p[0]] > 0)) return
     if (out.length > 1 && !numbersOnly) out.push({ kind: "sep", phase: "" })
-    out.push({ kind: "num", arg: String(n[p[0]]), phase: p[1] })
+    // Waiting and offline share the muted gray, so each carries its glyph.
+    var icon = !numbersOnly && (p[1] === "waiting" || p[1] === "stale") ? glyph(p[1]) : ""
+    out.push({ kind: "num", arg: String(n[p[0]]), phase: p[1], icon: icon })
   })
   return out
 }
 
 // A row's glyph, by phase.
 function glyph(phase) {
-  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", done: "󰗠", failed: "󰅙", limited: "󰔟", stale: "󰅐" }[phase] || "●"
+  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", waiting: "󰥔", done: "󰗠", failed: "󰅙", limited: "󰔟", stale: "󰌙" }[phase] || "●"
 }
 
-// The list's headline, mobile's summary: [i18n key, count].
-function summary(threads) {
+// The list's headline, mobile's summary: [i18n key, count]. threads are the
+// awake ones; snoozedCount the rest, so a list of only snoozed limits says so.
+function summary(threads, snoozedCount) {
   var attention = threads.filter(asking).length
   var failed = threads.filter(stopped).length
-  var active = threads.filter(function(t) { return !finished(t) }).length
+  var working = threads.filter(live).length
+  var stale = count(threads, "stale")
+  var waiting = count(threads, "waiting")
   if (attention > 0) return ["summary.needYou", attention]
-  if (active > 0 && failed > 0) return ["summary.stopped", failed]
-  if (active > 0) return ["summary.working", active]
+  if (working + waiting + stale > 0 && failed > 0) return ["summary.stopped", failed]
+  if (working > 0) return ["summary.working", working]
+  if (waiting > 0) return ["summary.waiting", waiting]
+  if (stale > 0) return ["summary.stale", stale]
   if (failed > 0) return ["summary.finishedStopped", failed]
+  if (snoozedCount > 0) return ["summary.snoozed", snoozedCount]
   return ["summary.allFinished", 0]
 }
 
-// T3's phase colors (web pills, iOS and Android live notifications):
-// Tailwind 300 stops on dark surfaces, 600 on light. Stale has none.
-function tint(phase, light) {
-  var t = {
-    starting: ["#7dd3fc", "#0284c7"], working: ["#7dd3fc", "#0284c7"],
-    perm: ["#fcd34d", "#d97706"], input: ["#a5b4fc", "#4f46e5"],
-    failed: ["#fca5a5", "#dc2626"], limited: ["#fca5a5", "#dc2626"], done: ["#6ee7b7", "#059669"]
-  }[phase]
-  return t ? t[light ? 1 : 0] : ""
+// ---- Colors ----
+// A palette is { red, green, yellow, blue, magenta, cyan, muted, fg, bg } as
+// "#rrggbb". Surfaces (fg, bg, muted) always come from the Omarchy theme; the
+// phase colors are T3's vivid ones (t3Palette) or the theme's, by setting.
+
+// "#rrggbb", or Qt's "#aarrggbb" for a translucent color.
+function rgb(hex) {
+  var m = /^#?(?:[0-9a-f]{2})?([0-9a-f]{6})$/i.exec(String(hex || ""))
+  if (!m) return null
+  var n = parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function hexOf(c) {
+  return "#" + c.map(function(v) { var h = Math.round(Math.max(0, Math.min(255, v))).toString(16); return h.length < 2 ? "0" + h : h }).join("")
+}
+function luminance(hex) {
+  var c = rgb(hex)
+  if (!c) return 0
+  var l = c.map(function(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) })
+  return 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
+}
+function contrast(a, b) {
+  var x = luminance(a), y = luminance(b)
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+}
+// A color too close to its background is mixed toward the theme's text color
+// until it reads: 3:1 by default (bold UI text, glyphs), 4.5:1 for small text.
+function readable(hex, bg, fg, target) {
+  if (!rgb(hex) || !rgb(bg) || !rgb(fg)) return hex
+  var a = rgb(hex), f = rgb(fg), need = target || 3
+  for (var i = 0; i <= 10; i++) {
+    var c = hexOf(a.map(function(v, k) { return v + (f[k] - v) * i / 10 }))
+    if (contrast(c, bg) >= need) return c
+  }
+  return fg
+}
+
+// Toast text shows as typed: Omarchy's notifications decode entities more
+// than once before rendering their few allowed tags, so escaping alone can't
+// keep "<b>" literal. Angle brackets become look-alikes instead.
+// Entities are broken too, so "&lt;b&gt;" can't decode into a tag.
+function toastText(text) {
+  return String(text || "").replace(/&(?=#?[A-Za-z0-9]+;)/g, "&\u2060").replace(/</g, "\u2039").replace(/>/g, "\u203a")
+}
+// Black or white, whichever reads better on a filled button.
+function inkOn(fill) {
+  return contrast(fill, "#000000") >= contrast(fill, "#ffffff") ? "#000000" : "#ffffff"
+}
+
+// Which palette color each phase takes.
+var PHASE_SLOT = { starting: "blue", working: "blue", input: "magenta", perm: "yellow",
+  failed: "red", limited: "red", done: "green", waiting: "muted", stale: "muted" }
+function phaseColor(phase, pal) {
+  return pal[PHASE_SLOT[phase]] || pal.fg
+}
+
+// T3's own vivid phase colors as a palette (Tailwind 300 stops on a dark
+// surface, 600 on a light one): sky, indigo, amber, red, emerald, cyan.
+function t3Palette(light) {
+  return light
+    ? { red: "#dc2626", green: "#059669", yellow: "#d97706", blue: "#0284c7", magenta: "#4f46e5", cyan: "#0891b2" }
+    : { red: "#fca5a5", green: "#6ee7b7", yellow: "#fcd34d", blue: "#7dd3fc", magenta: "#a5b4fc", cyan: "#67e8f9" }
+}
+
+// T3's project icon colors (Tailwind names) folded onto the theme's palette.
+function projectColor(name, pal) {
+  var slot = {
+    red: "red", rose: "red", pink: "red", orange: "yellow", amber: "yellow", yellow: "yellow",
+    lime: "green", green: "green", emerald: "green", teal: "cyan", cyan: "cyan", sky: "blue",
+    blue: "blue", indigo: "magenta", violet: "magenta", purple: "magenta", fuchsia: "magenta"
+  }[name]
+  return slot ? pal[slot] : pal.muted
+}
+
+// A pull request's glyph and color: merged, closed, failing, or open.
+function prLook(pr, pal) {
+  if (!pr) return null
+  // Octicons: git-merge, git-pull-request-closed, git-pull-request.
+  if (pr.state === "merged") return ["\uf419", pal.magenta]
+  if (pr.state === "closed") return ["\uf4dc", pal.red]
+  if (pr.checks === "failure" || pr.review === "CHANGES_REQUESTED") return ["\uf407", pal.red]
+  if (pr.checks === "pending") return ["\uf407", pal.yellow]
+  return ["\uf407", pal.green]
+}
+
+
+// A plan outlives the feed's own window for its stop (stopped rows leave 12 h
+// after the stop, limits 12 h after the reset): then nothing can use it.
+// Plans end this way, not by host, so a machine reached under a new name keeps
+// them, and one removed for good leaves nothing behind.
+function planExpired(entry, now) {
+  return now > Math.max(entry.resetAt || 0, entry.ended || 0, entry.dismissed || 0) + 13 * 3600000
+}
+
+// A stopped thread the user dismissed stays out of sight until it stops
+// again (a new run ends at a new time).
+function dismissed(t, plan) {
+  return !!(plan && plan.dismissed && stopped(t) && plan.dismissed === t.ended)
+}
+
+// The buttons a row shows, as [i18n key, action, phase]; only what that state
+// needs. Questions and approvals open the thread in T3 (they need its
+// context); stopped threads resume, wait for their limit, snooze or dismiss
+// right in the list. ctx: { phase: limitPhase(), snoozed, ownSnooze, resuming }.
+//   question -> Answer · approval -> Approve · failed -> Resume, Dismiss
+//   limit: not planned -> On reset, Snooze · planned -> Cancel, Snooze
+//          T3 resumes it -> Snooze · reset -> Resume, Dismiss
+//   snoozed by you -> Wake · snoozed by T3, resuming, anything else -> none
+function actions(t, ctx) {
+  if (t.state === "input") return [["answer", "open", "input"]]
+  if (t.state === "perm") return [["approve", "open", "perm"]]
+  if (!stopped(t) || ctx.resuming) return []
+  if (t.state === "failed") return [["resume", "resume", "working"], ["dismiss", "dismiss", ""]]
+  if (ctx.snoozed) return ctx.ownSnooze ? [["wake", "unsnooze", ""]] : []
+  switch (ctx.phase) {
+    case "reset": return [["resume", "resume", "working"], ["dismiss", "dismiss", ""]]
+    case "armed": return [["cancel", "disarm", ""], ["snooze", "snooze", ""]]
+    case "t3": return [["snooze", "snooze", ""]]
+    case "t3reset": return []
+    default: return [["resumeAt", "arm", "working"], ["snooze", "snooze", ""]]
+  }
+}
+
+// The island's tooltip: each count by name, [i18n key, n] pairs.
+function tooltip(c) {
+  var out = []
+  if (c.live) out.push(["tip.working", c.live])
+  if (c.input) out.push(["tip.input", c.input])
+  if (c.perm) out.push(["tip.perm", c.perm])
+  var stoppedN = (c.failed || 0) + (c.limited || 0)
+  if (stoppedN) out.push(["tip.stopped", stoppedN])
+  if (c.waiting) out.push(["tip.waiting", c.waiting])
+  if (c.stale) out.push(["tip.stale", c.stale])
+  return out
 }
 
 // What a state change is about, so a change toasts once: a new question gets
@@ -218,6 +371,9 @@ function stepText(step) {
     case "file_change": return d ? ["step.edit", d.split("/").pop()] : ["", ""]
     case "dynamic_tool": return d ? ["step.tool", d.split("__").pop()] : ["", ""]
     case "subagent": return ["step.subagent", d]
+    case "watch_pr": return ["step.watchPr", d]
+    case "wait_thread": return ["step.waitThread", ""]
+    case "background": return d ? ["step.background", d] : ["step.backgroundAny", ""]
     case "web_search": return ["step.search", ""]
     case "reasoning": return ["step.thinking", ""]
     case "assistant_message": return ["step.writing", ""]
@@ -238,11 +394,13 @@ function prText(pr) {
   return "pr.open"
 }
 
-// What a perm thread asks for, as an i18n key and its argument: the command
-// it wants to run when that is its latest step.
+// What a perm thread asks for, as an i18n key and its argument, taken from
+// the approval's own item: the command to run, or the file to read or edit.
 function permText(t) {
-  if (t.askKind === "command" && t.step && t.step.type === "command_execution" && t.step.detail)
-    return ["perm.commandRun", t.step.detail]
+  var d = t.permDetail || ""
+  if (d !== "" && t.askKind === "command") return ["perm.commandRun", d]
+  if (d !== "" && t.askKind === "file-change") return ["perm.editFile", d.split("/").pop()]
+  if (d !== "" && t.askKind === "file-read") return ["perm.readFile", d.split("/").pop()]
   return [{ command: "perm.command", "file-read": "perm.read", "file-change": "perm.edit" }[t.askKind] || "perm.other", ""]
 }
 

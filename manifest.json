@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "siam.t3-live",
   "name": "T3 Live",
-  "version": "1.6.0",
+  "version": "1.11.0",
   "author": "EhsanulHaqueSiam",
-  "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or permission, and what just finished, with toasts. Covers this machine and any ssh hosts.",
+  "description": "Live T3 Code agent threads in the bar: what is working, what needs your answer or approval, and what just finished, with toasts, on this machine and T3's linked machines.",
   "kinds": [
     "service",
     "bar-widget"
@@ -21,7 +21,9 @@
     "defaultSection": "right",
     "defaults": {
       "sshHosts": "",
-      "notify": true
+      "notify": true,
+      "colors": "T3",
+      "linked": true
     },
     "schema": [
       {
@@ -32,11 +34,29 @@
         "description": "Other machines running T3 Code, as ssh hosts separated by commas (e.g. mac, server). Each needs key-based ssh and sqlite3."
       },
       {
+        "key": "linked",
+        "type": "boolean",
+        "label": "Linked machines",
+        "defaultValue": true,
+        "description": "Also show threads from T3 Code's linked environments that this machine can reach over key-based ssh."
+      },
+      {
         "key": "notify",
         "type": "boolean",
         "label": "Notifications",
         "defaultValue": true,
         "description": "Toast when a thread needs you or finishes, and once more if a question waits 5 minutes."
+      },
+      {
+        "key": "colors",
+        "type": "enum",
+        "label": "Colors",
+        "options": [
+          "T3",
+          "Theme"
+        ],
+        "defaultValue": "T3",
+        "description": "T3 uses T3 Code's own vivid phase colors. Theme takes them from the Omarchy theme's palette. Backgrounds and text follow the theme either way."
       }
     ]
   },
