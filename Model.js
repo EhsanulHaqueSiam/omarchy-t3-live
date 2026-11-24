@@ -107,6 +107,30 @@ function chip(c) {
   return null
 }
 
+// The island's face as segments: a T3 mark, then one word (one thread, only
+// working ones, or a finish) or colored counts for a mix. `phase` picks the
+// color; "" is plain. numbersOnly (a vertical bar) never uses words.
+//   1 working -> T3 Working · 3 live -> T3 3 live · mix -> T3 3·1·1 · done -> T3 Done
+function face(c, flash, numbersOnly) {
+  if (flash) return numbersOnly
+    ? [{ kind: "mark", phase: flash }, { kind: "glyph", phase: flash }]
+    : [{ kind: "mark", phase: flash }, { kind: "word", key: flash, arg: "", phase: flash }]
+  var w = numbersOnly ? null : chip(c)
+  if (w) return [{ kind: "mark", phase: w[2] }, { kind: "word", key: w[0], arg: w[1], phase: w[2] === "working" ? "" : w[2] }]
+  var out = [{ kind: "mark", phase: c.input || c.perm ? "working" : (c.live ? "working" : "") }]
+  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stale", "stale"]].forEach(function(p) {
+    if (!(c[p[0]] > 0)) return
+    if (out.length > 1 && !numbersOnly) out.push({ kind: "sep", phase: "" })
+    out.push({ kind: "num", arg: String(c[p[0]]), phase: p[1] })
+  })
+  return out
+}
+
+// A row's glyph, by phase.
+function glyph(phase) {
+  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", done: "󰗠", failed: "󰅙", stale: "󰅐" }[phase] || "●"
+}
+
 // The list's headline, mobile's summary: [i18n key, count].
 function summary(threads) {
   var attention = threads.filter(asking).length

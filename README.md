@@ -4,11 +4,11 @@ An [Omarchy](https://omarchy.org) bar widget for [T3 Code](https://t3.codes) age
 
 It speaks the same language as T3 Code's own mobile live notification: the same phases (starting, working, question, approval, waiting, done, failed), the same words and the same phase colors.
 
-The bar stays small:
+The bar shows a compact black island, a little like the iPhone's Dynamic Island. When the state changes, its width eases to fit and the label cross-fades:
 
 - One thread says what it is doing: `T3  Working`, `T3  Answer`, `T3  Approve`, or `T3  Waiting` when its machine stopped answering.
 - Only working threads: `T3  3 live`.
-- A mix shows each count: `T3  3 live │ 1 input │ 1 perm`.
+- A mix shows each count as a colored numeral: `T3  3·1·1` (working, questions, approvals).
 - When a thread finishes, `T3  Done` (or `Failed`) for a few seconds.
 - Nothing running: the pill hides.
 

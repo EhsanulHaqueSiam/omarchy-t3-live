@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip summary tint stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary tint stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -59,6 +59,21 @@ assert.deepEqual(M.chip(c(3)), ["liveCount", "3", "working"])
 assert.deepEqual(M.chip(c(12)), ["liveCount", "9+", "working"])
 assert.equal(M.chip(c(2, 1)), null)
 assert.equal(M.chip(c(0, 1, 1)), null)
+
+// The island face: one word when chip() gives one, colored counts for a mix,
+// the finish word during a flash, and numbers only on a vertical bar.
+const text = f => f.map(x => x.kind === "mark" ? "T3" : x.kind === "sep" ? "·" : x.kind === "glyph" ? "*" : x.kind === "word" ? x.key + (x.arg ? "(" + x.arg + ")" : "") : x.arg).join(" ")
+assert.equal(text(M.face(c(1), "")), "T3 working")
+assert.equal(M.face(c(1), "")[1].phase, "")
+assert.equal(text(M.face(c(3), "")), "T3 liveCount(3)")
+assert.equal(text(M.face(c(3, 1, 1), "")), "T3 3 · 1 · 1")
+assert.deepEqual(M.face(c(3, 1, 1), "").filter(x => x.kind === "num").map(x => x.phase), ["working", "input", "perm"])
+assert.equal(text(M.face(c(0, 1), "")), "T3 answer")
+assert.equal(M.face(c(0, 1), "")[1].phase, "input")
+assert.equal(text(M.face(c(2), "done")), "T3 done")
+assert.equal(text(M.face(c(3, 1), "", true)), "T3 3 1")
+assert.equal(text(M.face(c(1), "failed", true)), "T3 *")
+assert.equal(M.glyph("input"), "󰋗")
 
 // The list's headline, mobile's summary.
 assert.deepEqual(M.summary([t("a", "input", 1), t("b", "perm", 1), t("c", "working", 1)]), ["summary.needYou", 2])
