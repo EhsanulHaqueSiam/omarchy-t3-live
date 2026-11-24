@@ -2,6 +2,8 @@
   "working": "Working",
   "liveCount": "%1 live",
   "waiting": "Waiting",
+  "waitingCount": "%1 waiting",
+  "offline": "Offline",
   "done": "Done",
   "failed": "Failed",
   "thisMachine": "this machine",
@@ -10,7 +12,7 @@
   "open": "Open",
   "heading.starting": "Starting",
   "heading.input": "Question for you",
-  "heading.stale": "Waiting for an update",
+  "heading.stale": "Machine not answering",
   "finishedIn": "Finished in %1",
   "failedAfter": "Failed after %1",
   "summary.needYou": {
@@ -20,6 +22,10 @@
   "summary.working": {
     "one": "%1 working",
     "other": "%1 working"
+  },
+  "summary.waiting": {
+    "one": "%1 waiting",
+    "other": "%1 waiting"
   },
   "summary.allFinished": {
     "one": "All finished",
@@ -33,6 +39,10 @@
   "step.edit": "Editing %1",
   "step.tool": "Using %1",
   "step.subagent": "Subagent: %1",
+  "step.watchPr": "Watching PR #%1",
+  "step.waitThread": "Waiting on another thread",
+  "step.background": "%1",
+  "step.backgroundAny": "Working in the background",
   "step.search": "Searching the web",
   "step.thinking": "Thinking",
   "step.writing": "Writing",
@@ -96,13 +106,17 @@
     "one": "%1 stopped",
     "other": "%1 stopped"
   },
+  "tip.waiting": {
+    "one": "%1 waiting",
+    "other": "%1 waiting"
+  },
   "tip.stale": {
-    "one": "%1 out of date",
-    "other": "%1 out of date"
+    "one": "%1 offline",
+    "other": "%1 offline"
   },
   "summary.stale": {
-    "one": "%1 out of date",
-    "other": "%1 out of date"
+    "one": "%1 offline",
+    "other": "%1 offline"
   },
   "summary.snoozed": {
     "one": "%1 snoozed",

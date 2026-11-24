@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine owner merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -54,7 +54,25 @@ const c = (live, input = 0, perm = 0, stale = 0) => ({ live, input, perm, stale 
 assert.deepEqual(M.chip(c(1)), ["working", "", "working"])
 assert.deepEqual(M.chip(c(0, 1)), ["answer", "", "input"])
 assert.deepEqual(M.chip(c(0, 0, 1)), ["approve", "", "perm"])
-assert.deepEqual(M.chip(c(0, 0, 0, 1)), ["waiting", "", "stale"])
+assert.deepEqual(M.chip(c(0, 0, 0, 1)), ["offline", "", "stale"])
+
+// Waiting (T3's sidebar word: a watch, background work, or another thread):
+// its own word, "N waiting" when alone, a muted count in a mix, ranked after
+// working and before done, and never a toast.
+const w = (n, live = 0) => ({ live, input: 0, perm: 0, waiting: n, stale: 0 })
+assert.deepEqual(M.chip(w(1)), ["waiting", "", "waiting"])
+assert.deepEqual(M.chip(w(2)), ["waitingCount", "2", "waiting"])
+assert.equal(M.chip(w(1, 2)), null)
+assert.deepEqual(M.face(w(1, 2), "").filter(x => x.kind === "num").map(x => x.phase + x.arg), ["working2", "waiting1"])
+assert.deepEqual(M.tooltip(w(1, 2)), [["tip.working", 2], ["tip.waiting", 1]])
+assert.deepEqual(M.summary([t("a", "waiting", 1), t("b", "done", 1, 2)]), ["summary.waiting", 1])
+assert.deepEqual(M.summary([t("a", "waiting", 1), t("b", "working", 1)]), ["summary.working", 1])
+assert.deepEqual(M.merge({ "": { env, threads: [t("d", "done", 1, 9), t("w", "waiting", 1), t("x", "working", 1)] } }).map(x => x.id), ["x", "w", "d"])
+assert.equal(M.parseLine(JSON.stringify({ env, threads: [{ id, state: "waiting", step: ["watch_pr", "76"] }] })).threads[0].state, "waiting")
+assert.deepEqual(M.transitions({}, [t("w", "waiting", 1)]), [])
+assert.deepEqual(M.stepText({ type: "watch_pr", detail: "76" }), ["step.watchPr", "76"])
+assert.deepEqual(M.stepText({ type: "wait_thread", detail: "" }), ["step.waitThread", ""])
+assert.deepEqual(M.stepText({ type: "background", detail: "" }), ["step.backgroundAny", ""])
 assert.deepEqual(M.chip(c(3)), ["liveCount", "3", "working"])
 assert.deepEqual(M.chip(c(12)), ["liveCount", "9+", "working"])
 assert.equal(M.chip(c(2, 1)), null)
@@ -224,5 +242,12 @@ assert.equal(M.elapsed(134000), "2:14")
 assert.equal(M.elapsed(3725000), "1:02:05")
 assert.equal(M.elapsed(-5), "0:00")
 assert.equal(M.threadUrl({ env, id }), `t3code://threads/${env}/${id}`)
+
+// One machine reached under two names: a live route keeps it, a stale one gives way.
+const routes = { mac: { env, threads: [] }, "mac-wan": { env, threads: [] }, box: { env: id, threads: [] } }
+assert.deepEqual(M.owner(routes, {}, "mac", env), { host: "mac-wan", live: true })
+assert.deepEqual(M.owner(routes, { "mac-wan": 1 }, "mac", env), { host: "mac-wan", live: false })
+assert.equal(M.owner(routes, {}, "box", id), null)
+assert.equal(M.owner({ mac: null }, {}, "x", env), null)
 
 console.log("model tests passed")

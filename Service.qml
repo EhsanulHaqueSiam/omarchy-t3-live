@@ -42,9 +42,10 @@ Item {
   property var sources: ({})
   readonly property var allThreads: Model.merge(sources)
 
-  // What the user planned for stopped threads, by planKey: { resetAt, resume,
-  // snooze } for a limit, { dismissed: ended } for a dismissed row. Kept in a
-  // file so a planned resume survives a shell restart.
+  // What the user planned for stopped threads, by planKey (environment and
+  // thread, so it holds whichever host reaches the machine): { host, resetAt,
+  // resume, snooze } for a limit, { host, dismissed: ended } for a dismissed
+  // row. Kept in a file so a planned resume survives a shell restart.
   property var plan: ({})
   // planKey -> when a resume was sent: the row says "Resuming" until the
   // thread's machine reports it running again, or for 60 s at most.
@@ -115,10 +116,11 @@ Item {
   readonly property int inputCount: Model.count(awakeThreads, "input")
   readonly property int permCount: Model.count(awakeThreads, "perm")
   readonly property int staleCount: Model.count(awakeThreads, "stale")
+  readonly property int waitingCount: Model.count(awakeThreads, "waiting")
   readonly property int failedCount: Model.count(awakeThreads, "failed")
   readonly property int limitedCount: Model.count(awakeThreads, "limited")
-  readonly property int activeCount: liveCount + inputCount + permCount + staleCount + failedCount + limitedCount
-  readonly property var counts: ({ live: liveCount, input: inputCount, perm: permCount, stale: staleCount, failed: failedCount, limited: limitedCount })
+  readonly property int activeCount: liveCount + inputCount + permCount + waitingCount + staleCount + failedCount + limitedCount
+  readonly property var counts: ({ live: liveCount, input: inputCount, perm: permCount, waiting: waitingCount, stale: staleCount, failed: failedCount, limited: limitedCount })
 
   // "done", "failed" or "limited" for a few seconds after a thread stops, for the bar.
   property string flash: ""
@@ -148,7 +150,7 @@ Item {
     return decodeURIComponent(String(Qt.resolvedUrl(name)).replace(/^file:\/\//, ""))
   }
 
-  function planKey(t) { return t.host + "|" + t.id }
+  function planKey(t) { return t.env + "|" + t.id }
   function planFor(t) { return root.plan[planKey(t)] }
   function limitPhase(t) { return Model.limitPhase(t, root.now, planFor(t)) }
   function isSnoozed(t) { return Model.snoozed(t, root.now, planFor(t)) }
@@ -167,28 +169,31 @@ Item {
     // alias) is shown once: the first host to report an environment keeps it.
     // The other host's latest snapshot is kept, so it takes over the moment
     // the first one drops (its feed only prints again on a change).
-    var owner = Object.keys(root.sources).filter(function(h) { return h !== host && root.sources[h] && root.sources[h].env === parsed.env })[0]
-    if (owner !== undefined) { root.shadow[host] = parsed; return }
+    var owner = Model.owner(root.sources, root.staleSince, host, parsed.env)
+    if (owner && owner.live) { root.shadow[host] = parsed; return }
+    // A stale route's rows give way to this live one.
+    if (owner) clear(owner.host)
     delete root.shadow[host]
     delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
     root.seen[host] = Model.keys(parsed.threads)
     setSource(host, parsed)
-    tidy(host, parsed.threads)
+    tidy(parsed.env, host, parsed.threads)
     events.forEach(function(t) { announce(Object.assign({}, t, { env: parsed.env, host: host }), false) })
   }
 
   // Plans and "Resuming" marks end once the thread is no longer stopped, a
   // newer limit replaced the one they were for, or it stopped again since a
-  // dismissal.
-  function tidy(host, list) {
+  // dismissal. A plan follows the host that now shows its machine.
+  function tidy(env, host, list) {
     var byId = {}
     list.forEach(function(t) { byId[t.id] = t })
     var plan = Object.assign({}, root.plan), resuming = Object.assign({}, root.resuming), changed = false
     Object.keys(plan).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]], e = plan[key]
-      if (parts[0] !== host) return
+      if (parts[0] !== env) return
+      if (e.host !== host) { plan[key] = e = Object.assign({}, e, { host: host }); changed = true }
       // A thread missing from a full snapshot may only be past the row cap.
       if (!t) { if (list.length < 50) { delete plan[key]; changed = true } return }
       // A plan belongs to one stop: the same reset and the same end time.
@@ -198,7 +203,7 @@ Item {
     })
     Object.keys(resuming).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]]
-      if (parts[0] === host && (!t || !Model.finished(t))) delete resuming[key]
+      if (parts[0] === env && (!t || !Model.finished(t))) delete resuming[key]
     })
     root.resuming = resuming
     if (changed) setPlan(plan)
@@ -208,16 +213,19 @@ Item {
   // reaches the same machine show it.
   function drop(host) {
     var s = root.sources[host]
-    delete root.seen[host]
-    delete root.staleSince[host]
-    delete root.shadow[host]
-    setSource(host, null)
+    clear(host)
     var alt = s ? standIn(s.env) : undefined
     if (alt !== undefined) {
       var p = root.shadow[alt]
       delete root.shadow[alt]
       receive(alt, p)
     }
+  }
+  function clear(host) {
+    delete root.seen[host]
+    delete root.staleSince[host]
+    delete root.shadow[host]
+    setSource(host, null)
   }
   // A host whose live feed reports this environment but isn't shown.
   function standIn(env) {
@@ -261,12 +269,7 @@ Item {
     // Also once per stop across the queue and the send in flight.
     var queued = root.jobs.concat(root.job ? [root.job] : []).some(function(j) { return j.key === key && j.ended === t.ended })
     if (queued || root.resuming[key] || !Model.stopped(t) || (t.recovery && t.recovery.autoResume)) return
-    // 60 s at most, so one hung send can't hold up every later resume.
-    var argv = t.host === ""
-      ? ["bash", "-lc", 'exec "$@"', "bash", "timeout", "60", "t3", "thread", "send", t.id, root.resumeMessage]
-      : ["timeout", "60", "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", t.host,
-         'PATH="$HOME/.local/bin:$HOME/.t3/bin:$PATH" t3 thread send ' + t.id + ' "' + root.resumeMessage + '"']
-    root.jobs = root.jobs.concat([{ argv: argv, key: key, title: t.title, env: t.env, id: t.id, ended: t.ended }])
+    root.jobs = root.jobs.concat([{ key: key, title: t.title, env: t.env, id: t.id, ended: t.ended }])
     pump()
   }
 
@@ -274,7 +277,7 @@ Item {
     if (field !== "dismissed" && (t.state !== "limited" || !t.failure)) return
     if (field === "dismissed" && !Model.stopped(t)) return
     var key = planKey(t), plan = Object.assign({}, root.plan)
-    var entry = Object.assign({ resetAt: t.failure ? t.failure.resetAt : 0, ended: t.ended, resume: false, snooze: false, dismissed: 0 }, plan[key])
+    var entry = Object.assign({ host: t.host, resetAt: t.failure ? t.failure.resetAt : 0, ended: t.ended, resume: false, snooze: false, dismissed: 0 }, plan[key])
     entry[field] = value
     if (!entry.resume && !entry.snooze && !entry.dismissed) delete plan[key]
     else plan[key] = entry
@@ -291,13 +294,13 @@ Item {
   function pruneHosts() {
     var plan = Object.assign({}, root.plan), changed = false
     Object.keys(plan).forEach(function(key) {
-      if (root.hosts.indexOf(key.split("|")[0]) === -1) { delete plan[key]; changed = true }
+      if (root.hosts.indexOf(plan[key].host) === -1) { delete plan[key]; changed = true }
     })
     if (changed) setPlan(plan)
   }
   // Debounced: at startup the hosts arrive from the widget a moment after the
   // plan loads, and a plan for "mac" must not be dropped before they do.
-  onHostsChanged: pruneTimer.restart()
+  onHostsChanged: { syncHosts(); pruneTimer.restart() }
   onHostsReadyChanged: pruneTimer.restart()
   onDiscoveredChanged: pruneTimer.restart()
   Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded && root.hostsReady && (root.discovered || !root.linked)) root.pruneHosts() }
@@ -316,8 +319,9 @@ Item {
     var plan = {}
     Object.keys(data).slice(0, 100).forEach(function(key) {
       var v = data[key]
-      if (!/^[A-Za-z0-9_.@-]*\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
-      plan[key] = { resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, ended: typeof v.ended === "number" ? v.ended : 0,
+      // Environment|thread; entries from before plans followed the machine are dropped.
+      if (!/^[0-9a-fA-F-]{8,64}\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
+      plan[key] = { host: typeof v.host === "string" && /^[A-Za-z0-9_.@-]*$/.test(v.host) ? v.host : "", resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, ended: typeof v.ended === "number" ? v.ended : 0,
         resume: v.resume === true, snooze: v.snooze === true,
         dismissed: typeof v.dismissed === "number" ? v.dismissed : 0 }
     })
@@ -325,7 +329,7 @@ Item {
     root.planLoaded = true
     // Check the loaded plan against what the feeds already reported.
     // Not a stale machine's: its stopped threads are hidden, not gone.
-    Object.keys(root.sources).forEach(function(h) { if (root.sources[h] && !(h in root.staleSince)) root.tidy(h, root.sources[h].threads) })
+    Object.keys(root.sources).forEach(function(h) { if (root.sources[h] && !(h in root.staleSince)) root.tidy(root.sources[h].env, h, root.sources[h].threads) })
     pruneTimer.restart()
   }
 
@@ -365,7 +369,12 @@ Item {
       marks[job.key] = Date.now()
       root.resuming = marks
       if (root.plan[job.key]) { var plan = Object.assign({}, root.plan); delete plan[job.key]; setPlan(plan) }
-      resumer.command = job.argv
+      // Through whichever host shows the machine now; 60 s at most, so one
+      // hung send can't hold up every later resume.
+      resumer.command = t.host === ""
+        ? ["bash", "-lc", 'exec "$@"', "bash", "timeout", "60", "t3", "thread", "send", t.id, root.resumeMessage]
+        : ["timeout", "60", "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", t.host,
+           'PATH="$HOME/.local/bin:$HOME/.t3/bin:$PATH" t3 thread send ' + t.id + ' "' + root.resumeMessage + '"']
       resumer.running = true
     }
   }
@@ -484,8 +493,8 @@ Item {
       var now = Date.now()
       Object.keys(root.staleSince).forEach(function(host) {
         if (now - root.staleSince[host] < 10 * 60000) return
-        delete root.staleSince[host]
-        root.setSource(host, null)
+        // Gone for good; another route to the same machine takes over.
+        root.drop(host)
       })
     }
   }
@@ -515,7 +524,7 @@ Item {
     target: "siam.t3-live"
     function toggle(): void { root.toggleRequested() }
     function status(): string {
-      return JSON.stringify({ live: root.liveCount, input: root.inputCount, perm: root.permCount, stale: root.staleCount,
+      return JSON.stringify({ live: root.liveCount, input: root.inputCount, perm: root.permCount, waiting: root.waitingCount, stale: root.staleCount,
         failed: root.failedCount, limited: root.limitedCount, plan: root.plan, threads: root.threads })
     }
     function resume(env: string, id: string, stop: string): void { root.withThread(env, id, stop, root.resumeNow) }
@@ -552,11 +561,22 @@ Item {
     onTriggered: if (!discover.running) discover.running = true
   }
 
+  // Synced in place, so a machine coming or going never restarts the others' feeds.
+  ListModel { id: hostModel }
+  function syncHosts() {
+    for (var i = hostModel.count - 1; i >= 0; i--)
+      if (root.hosts.indexOf(hostModel.get(i).name) === -1) hostModel.remove(i)
+    root.hosts.forEach(function(h) {
+      for (var j = 0; j < hostModel.count; j++) if (hostModel.get(j).name === h) return
+      hostModel.append({ name: h })
+    })
+  }
+  Component.onCompleted: syncHosts()
   Instantiator {
-    model: root.hosts
+    model: hostModel
     delegate: Feed {
-      required property string modelData
-      host: modelData
+      required property string name
+      host: name
     }
   }
 

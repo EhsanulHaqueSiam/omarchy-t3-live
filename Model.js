@@ -7,8 +7,10 @@ var UUID = /^[0-9a-fA-F-]{8,64}$/
 var HOST = /^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$/
 // The phases of T3's own mobile live notification, by our names:
 // starting, working (running), input, perm (approval), stale, done, failed,
-// plus limited: a run that stopped at a usage limit.
-var STATES = ["starting", "working", "input", "perm", "stale", "done", "failed", "limited"]
+// plus limited (a run that stopped at a usage limit) and waiting (the
+// sidebar's "Waiting": its turn ended but it still watches a pull request or
+// has background work, or it waits on another thread).
+var STATES = ["starting", "working", "input", "perm", "waiting", "stale", "done", "failed", "limited"]
 var ASKING = ["input", "perm"]
 var TOASTS = ["input", "perm", "done", "failed", "limited"]
 
@@ -73,9 +75,10 @@ function stopped(t) { return t.state === "failed" || t.state === "limited" }
 function finished(t) { return t.state === "done" || stopped(t) }
 function live(t) { return t.state === "working" || t.state === "starting" }
 
-// Mobile's order: needs you, failed (and limited), working, then done and stale.
+// Mobile's order: needs you, failed (and limited), working, waiting, then
+// done and stale.
 function rank(t) {
-  return asking(t) ? 0 : stopped(t) ? 1 : live(t) ? 2 : 3
+  return asking(t) ? 0 : stopped(t) ? 1 : live(t) ? 2 : t.state === "waiting" ? 3 : 4
 }
 
 // Where a limited thread stands, given what the plugin planned for it
@@ -103,6 +106,15 @@ function snoozed(t, now, plan) {
 
 // sources: { host: { env, threads } } -> one list in mobile's order; within
 // a group, the longest waiting question first, otherwise the newest.
+// Who already shows the machine (env) that `host` also reaches: a live host
+// keeps it ({ host, live: true }); a stale one gives way ({ host, live: false }).
+function owner(sources, stale, host, env) {
+  var others = Object.keys(sources).filter(function(h) { return h !== host && sources[h] && sources[h].env === env })
+  var live = others.filter(function(h) { return !(h in stale) })
+  if (live.length) return { host: live[0], live: true }
+  return others.length ? { host: others[0], live: false } : null
+}
+
 function merge(sources) {
   var all = []
   Object.keys(sources).forEach(function(host) {
@@ -128,21 +140,24 @@ function markStale(threads) {
     .map(function(t) { return Object.assign({}, t, { state: "stale" }) })
 }
 
-// counts: { live, input, perm, stale, failed, limited }. One thread, or only
-// working ones, gets mobile's one-word chip as [i18n key, argument, phase]; a
-// mix gets null, and the bar shows each count.
+// counts: { live, input, perm, waiting, stale, failed, limited }. One thread,
+// or only working (or only waiting) ones, gets mobile's one-word chip as
+// [i18n key, argument, phase]; a mix gets null, and the bar shows each count.
 function chip(c) {
-  var failed = c.failed || 0, limited = c.limited || 0
-  var total = c.live + c.input + c.perm + c.stale + failed + limited
+  var failed = c.failed || 0, limited = c.limited || 0, waiting = c.waiting || 0
+  var total = c.live + c.input + c.perm + waiting + c.stale + failed + limited
+  var n = function(v) { return v > 9 ? "9+" : String(v) }
   if (total === 1) {
     if (c.live) return ["working", "", "working"]
     if (c.input) return ["answer", "", "input"]
     if (c.perm) return ["approve", "", "perm"]
     if (failed) return ["failed", "", "failed"]
     if (limited) return ["limit", "", "limited"]
-    return ["waiting", "", "stale"]
+    if (waiting) return ["waiting", "", "waiting"]
+    return ["offline", "", "stale"]
   }
-  if (total > 1 && total === c.live) return ["liveCount", c.live > 9 ? "9+" : String(c.live), "working"]
+  if (total > 1 && total === c.live) return ["liveCount", n(c.live), "working"]
+  if (total > 1 && total === waiting) return ["waitingCount", n(waiting), "waiting"]
   return null
 }
 
@@ -157,8 +172,8 @@ function face(c, flash, numbersOnly) {
   var w = numbersOnly ? null : chip(c)
   if (w) return [{ kind: "mark", phase: w[2] }, { kind: "word", key: w[0], arg: w[1], phase: w[2] === "working" ? "" : w[2] }]
   var out = [{ kind: "mark", phase: c.live || c.input || c.perm ? "working" : "" }]
-  var n = { live: c.live, input: c.input, perm: c.perm, stopped: (c.failed || 0) + (c.limited || 0), stale: c.stale }
-  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["stale", "stale"]].forEach(function(p) {
+  var n = { live: c.live, input: c.input, perm: c.perm, stopped: (c.failed || 0) + (c.limited || 0), waiting: c.waiting || 0, stale: c.stale }
+  ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["waiting", "waiting"], ["stale", "stale"]].forEach(function(p) {
     if (!(n[p[0]] > 0)) return
     if (out.length > 1 && !numbersOnly) out.push({ kind: "sep", phase: "" })
     out.push({ kind: "num", arg: String(n[p[0]]), phase: p[1] })
@@ -168,7 +183,7 @@ function face(c, flash, numbersOnly) {
 
 // A row's glyph, by phase.
 function glyph(phase) {
-  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", done: "󰗠", failed: "󰅙", limited: "󰔟", stale: "󰅐" }[phase] || "●"
+  return { working: "󱥸", starting: "󰝦", input: "󰋗", perm: "󰀨", waiting: "󰥔", done: "󰗠", failed: "󰅙", limited: "󰔟", stale: "󰌙" }[phase] || "●"
 }
 
 // The list's headline, mobile's summary: [i18n key, count]. threads are the
@@ -178,9 +193,11 @@ function summary(threads, snoozedCount) {
   var failed = threads.filter(stopped).length
   var working = threads.filter(live).length
   var stale = count(threads, "stale")
+  var waiting = count(threads, "waiting")
   if (attention > 0) return ["summary.needYou", attention]
-  if (working + stale > 0 && failed > 0) return ["summary.stopped", failed]
+  if (working + waiting + stale > 0 && failed > 0) return ["summary.stopped", failed]
   if (working > 0) return ["summary.working", working]
+  if (waiting > 0) return ["summary.waiting", waiting]
   if (stale > 0) return ["summary.stale", stale]
   if (failed > 0) return ["summary.finishedStopped", failed]
   if (snoozedCount > 0) return ["summary.snoozed", snoozedCount]
@@ -238,7 +255,7 @@ function inkOn(fill) {
 
 // Which palette color each phase takes.
 var PHASE_SLOT = { starting: "blue", working: "blue", input: "magenta", perm: "yellow",
-  failed: "red", limited: "red", done: "green", stale: "muted" }
+  failed: "red", limited: "red", done: "green", waiting: "muted", stale: "muted" }
 function phaseColor(phase, pal) {
   return pal[PHASE_SLOT[phase]] || pal.fg
 }
@@ -310,6 +327,7 @@ function tooltip(c) {
   if (c.perm) out.push(["tip.perm", c.perm])
   var stoppedN = (c.failed || 0) + (c.limited || 0)
   if (stoppedN) out.push(["tip.stopped", stoppedN])
+  if (c.waiting) out.push(["tip.waiting", c.waiting])
   if (c.stale) out.push(["tip.stale", c.stale])
   return out
 }
@@ -343,6 +361,9 @@ function stepText(step) {
     case "file_change": return d ? ["step.edit", d.split("/").pop()] : ["", ""]
     case "dynamic_tool": return d ? ["step.tool", d.split("__").pop()] : ["", ""]
     case "subagent": return ["step.subagent", d]
+    case "watch_pr": return ["step.watchPr", d]
+    case "wait_thread": return ["step.waitThread", ""]
+    case "background": return d ? ["step.background", d] : ["step.backgroundAny", ""]
     case "web_search": return ["step.search", ""]
     case "reasoning": return ["step.thinking", ""]
     case "assistant_message": return ["step.writing", ""]

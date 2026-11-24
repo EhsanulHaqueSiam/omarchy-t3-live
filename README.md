@@ -38,9 +38,10 @@ rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-t3-live/plan.json"   # its 
 
 - `T3 Working`: one thread is running.
 - `T3 3 live`: only running threads.
-- `T3 3·1·1`: a mix, as counts in T3's phase colors: running (sky), questions (indigo), approvals (amber), stopped (red), out of date (gray). Hover for the names.
+- `T3 3·1·1`: a mix, as counts in T3's phase colors: running (sky), questions (indigo), approvals (amber), stopped (red), waiting and offline (gray). Hover for the names.
 - `T3 Answer` / `T3 Approve`: the one thread needs you.
-- `T3 Failed` / `T3 Limit` / `T3 Waiting`: the one thread stopped, hit a usage limit, or its machine stopped answering.
+- `T3 Waiting` / `T3 2 waiting`: T3's own "Waiting": the turn ended, but the thread still watches a pull request (a deploy, CI), has background work running, or waits on another thread. It isn't done, so it never says Done.
+- `T3 Failed` / `T3 Limit` / `T3 Offline`: the one thread stopped, hit a usage limit, or its machine stopped answering.
 - `T3 Done`: shown for a few seconds when a thread finishes; a waiting question or approval is never covered by it.
 
 Nothing running and nothing stopped: the island fades out and gives its space back. It never animates on its own; it only moves when something changes.
@@ -54,6 +55,7 @@ One row per thread: the title, one line of what is happening now, and a line wit
 | State | The line under the title | Buttons |
 | --- | --- | --- |
 | Working, starting | Its current step: `Editing Hero.tsx`, `$ pnpm test` | none (elapsed time) |
+| Waiting | What it waits on: `Watching PR #76`, `$ gh run watch`, `Waiting on another thread` | none (time waiting) |
 | Question | The question | **Answer**: opens the thread in T3 |
 | Approval | What it wants: `Wants to run: pnpm test` | **Approve**: opens the thread in T3 |
 | Failed | The error | **Resume**, **Dismiss** |
@@ -62,7 +64,7 @@ One row per thread: the title, one line of what is happening now, and a line wit
 | Usage limit, T3 will resume it | `Resumes 4:00 PM` | **Snooze** (none once it has reset) |
 | Usage limit, reset | `Limit reset` | **Resume**, **Dismiss** |
 | Snoozed | `Snoozed until 4:00 PM`, dimmed, at the end | **Wake** (only for snoozes made here) |
-| Out of date | `Waiting for an update`: its machine stopped answering | none |
+| Offline | `Machine not answering`, for 10 minutes | none |
 | Done | `Finished in 12:04`, for 2 minutes | none |
 
 Clicking a row opens its thread in T3. A long list scrolls inside a card about eight rows tall.
@@ -100,7 +102,7 @@ To add a machine by hand, put its ssh host in the widget's **Other machines** se
 { "id": "siam.t3-live", "sshHosts": "mac, server" }
 ```
 
-Each host needs key-based ssh (the plugin connects with `BatchMode=yes`), T3 Code, `sqlite3` (macOS has it) and the `t3` command for Resume. Nothing gets installed there. A machine that stops answering shows its threads as out of date for 10 minutes, and the plugin keeps trying every 30 seconds.
+Each host needs key-based ssh (the plugin connects with `BatchMode=yes`), T3 Code, `sqlite3` (macOS has it) and the `t3` command for Resume. Nothing gets installed there. A machine that stops answering shows its threads as offline for 10 minutes, and the plugin keeps trying every 30 seconds.
 
 Opening a thread from another machine goes through the T3 Code desktop app, which knows your linked machines. Without the desktop app, it opens in this machine's T3 web UI, which only knows this machine's threads.
 
@@ -116,13 +118,13 @@ bindd = SUPER ALT, T, T3 agents, exec, omarchy-shell siam.t3-live toggle
 
 ## How it works
 
-`feed.sh` reads T3 Code's database (opened read-only) every 2 seconds and prints a line only when something changes. It runs once on this machine, and on each ssh host over one long-lived `ssh host sh -s`. If its query keeps failing (T3 changed its database), it stops, and that machine shows as out of date instead of frozen. All bars share one set of feeds.
+`feed.sh` reads T3 Code's database (opened read-only) every 2 seconds and prints a line only when something changes. It runs once on this machine, and on each ssh host over one long-lived `ssh host sh -s`. If its query keeps failing (T3 changed its database), it stops, and that machine shows as offline instead of frozen. All bars share one set of feeds.
 
 ## Limits
 
 - English only for now; other languages fall back to English.
 - Numbers and layout don't yet follow right-to-left languages.
-- It reads T3's internal database, so a T3 update can change what it can see; the feed then shows the machine as out of date rather than guessing.
+- It reads T3's internal database, so a T3 update can change what it can see; the feed then shows the machine as offline rather than guessing.
 
 ## Development
 

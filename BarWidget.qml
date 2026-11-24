@@ -21,7 +21,7 @@ BarWidget {
   readonly property var service: bar && bar.shell ? bar.shell.firstPartyServiceFor("siam.t3-live") : null
   readonly property var threads: service ? service.threads : []
   readonly property bool active: service ? service.activeCount > 0 : false
-  readonly property var counts: service ? service.counts : { live: 0, input: 0, perm: 0, stale: 0, failed: 0, limited: 0 }
+  readonly property var counts: service ? service.counts : { live: 0, input: 0, perm: 0, waiting: 0, stale: 0, failed: 0, limited: 0 }
   // A finish flashes, unless a question or approval is waiting: that stays up.
   readonly property string flash: service && counts.input + counts.perm === 0 ? service.flash : ""
   readonly property var pal: service ? service.palette : { red: "#ff6b6b", green: "#6ee7b7", yellow: "#fcd34d", blue: "#7dd3fc", magenta: "#a5b4fc", cyan: "#7dd3fc", muted: "#808080", fg: "#ffffff", bg: "#000000" }
@@ -63,8 +63,9 @@ BarWidget {
   }
 
   // A theme color, lifted until it reads on the surface it sits on.
-  function onSurface(hex, surface) { return Model.readable(hex, String(surface), root.pal.fg) }
-  function phaseOn(phase, surface) { return onSurface(Model.phaseColor(phase, root.pal), surface) }
+  // Glyphs need 3:1; small text asks for 4.5.
+  function onSurface(hex, surface, target) { return Model.readable(hex, String(surface), root.pal.fg, target) }
+  function phaseOn(phase, surface, target) { return onSurface(Model.phaseColor(phase, root.pal), surface, target) }
 
   onThreadsChanged: {
     root.syncRows()
@@ -218,7 +219,7 @@ BarWidget {
             if (m.kind === "word") return m.arg !== "" ? strings.t(m.key).arg(m.arg) : strings.t(m.key)
             return m.arg || ""
           }
-          color: seg.modelData.phase ? root.phaseOn(seg.modelData.phase, root.pal.bg) : root.pal.fg
+          color: seg.modelData.phase ? root.phaseOn(seg.modelData.phase, root.pal.bg, seg.modelData.kind === "glyph" ? 3 : 4.5) : root.pal.fg
           font.family: root.barFont
           font.pixelSize: Style.font.bodySmall
           font.bold: true
@@ -332,7 +333,8 @@ BarWidget {
       header: Rectangle {
         width: list.width
         height: headRow.height
-        color: popup.surface
+        // Fully opaque even on a translucent theme, or rows show through it.
+        color: Qt.rgba(popup.surface.r, popup.surface.g, popup.surface.b, 1)
         z: 2
         Row {
           id: headRow
@@ -383,6 +385,7 @@ BarWidget {
         // fading it with opacity would sink its small text below that.
         readonly property color muted: Model.readable(String(Qt.tint(Commons.Color.popups.text, Qt.rgba(popup.surface.r, popup.surface.g, popup.surface.b, 0.5))), String(popup.surface), root.pal.fg, 4.5)
         readonly property color tint: dimmed ? muted : root.phaseOn(kind, popup.surface)
+        readonly property color tintText: dimmed ? muted : root.phaseOn(kind, popup.surface, 4.5)
         readonly property color ink: dimmed ? muted : Commons.Color.popups.text
         readonly property real inset: Style.space(8)
         // A limit whose resume is already planned is handled, not an alarm.
@@ -526,7 +529,7 @@ BarWidget {
               elide: Text.ElideRight
               textFormat: Text.PlainText
               text: row.detail
-              color: row.alert ? row.tint : row.ink
+              color: row.alert ? row.tintText : row.ink
               opacity: row.alert || row.dimmed ? 1 : 0.82
               font.family: root.barFont
               font.pixelSize: Style.font.bodySmall
@@ -585,7 +588,7 @@ BarWidget {
               : row.kind === "failed" ? strings.t("failed")
               : row.kind === "limited" ? strings.t("limit")
               : Model.elapsed(root.now - row.t.since)
-            color: row.kind === "done" || row.alert ? row.tint : row.ink
+            color: row.kind === "done" || row.alert ? row.tintText : row.ink
             font.family: root.barFont
             font.pixelSize: Style.font.bodySmall
             font.bold: true
@@ -614,7 +617,8 @@ BarWidget {
               radius: height / 2
               color: filled ? fill : "transparent"
               border.width: filled ? 0 : 1
-              border.color: Qt.rgba(row.ink.r, row.ink.g, row.ink.b, 0.25)
+              readonly property color labelColor: Commons.Color.popups.text
+              border.color: Qt.rgba(labelColor.r, labelColor.g, labelColor.b, 0.25)
               opacity: capsuleMouse.containsMouse ? 0.85 : 1
               scale: capsuleMouse.pressed ? 0.96 : 1
               Behavior on scale { NumberAnimation { duration: Style.duration(100); easing.type: Easing.OutCubic } }
@@ -626,7 +630,7 @@ BarWidget {
                 textFormat: Text.PlainText
                 text: strings.t(capsule.modelData[0])
                 // Black or white, whichever reads on this theme's fill.
-                color: capsule.filled ? Model.inkOn(capsule.fill) : row.ink
+                color: capsule.filled ? Model.inkOn(capsule.fill) : capsule.labelColor
                 font.family: Style.font.family
                 font.pixelSize: Style.font.bodySmall
                 font.bold: capsule.filled

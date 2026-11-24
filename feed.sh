@@ -3,13 +3,16 @@
 #   {"env":"<environmentId>","threads":[{
 #     "id","title","project",
 #     "state",      starting | working | input (a question) | perm (an approval) |
-#                   done | failed | limited (stopped at a usage limit)
+#                   waiting (T3's "Waiting": its turn ended but it still watches a
+#                   pull request or has background work, or it waits on another
+#                   thread) | done | failed | limited (stopped at a usage limit)
 #     "failure",    {class, message, retryable, resetAt} for failed and limited
 #     "recovery",   T3's own {autoResume, snooze} for this limit, when armed
 #     "askKind",    the pending request's kind, for input and perm
 #     "question",   what an input thread asks
 #     "permDetail", the command or file a perm thread asks about
-#     "step",       [type, detail] of a working thread's latest item
+#     "step",       [type, detail] of a working thread's latest item, or of what
+#                   a waiting one waits on
 #     "pr",         {n, state, checks, review} of its newest pull request
 #     "issue",      its first linked issue, as T3 shows it ("#40471")
 #     "projectColor" the project's T3 icon color name ("gray", "blue", ...)
@@ -34,6 +37,52 @@ WITH live AS (
   FROM orchestration_v2_projection_runs
   WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
   GROUP BY thread_id
+), blocked AS (
+  -- T3's deriveBlockedOnThreadWait: a running turn whose only running work
+  -- waits on another thread (t3_thread_wait, or delegate_task in wait mode).
+  SELECT i.thread_id
+  FROM orchestration_v2_projection_turn_items i
+  JOIN orchestration_v2_projection_runs r ON r.run_id = i.run_id AND r.status = 'running'
+  WHERE i.status IN ('pending', 'running', 'waiting') AND i.status <> 'pending'
+    AND i.type IN ('command_execution', 'dynamic_tool', 'subagent', 'file_change', 'file_search', 'web_search', 'compaction')
+    AND NOT (i.type = 'subagent' AND json_extract(i.payload_json, '\$.origin') = 'app_owned')
+  GROUP BY i.thread_id
+  HAVING min(i.type = 'dynamic_tool' AND (json_extract(i.payload_json, '\$.toolName') LIKE '%t3_thread_wait'
+    OR (json_extract(i.payload_json, '\$.toolName') LIKE '%delegate_task' AND json_extract(i.payload_json, '\$.input.mode') = 'wait'))) = 1
+), pend AS (
+  -- T3's pending background work (derivePendingBackgroundWork): background
+  -- items still running, the provider's own background tasks, and pull
+  -- request watches; prio picks the one a row shows.
+  SELECT i.thread_id, 1 AS prio, json_array(i.type, coalesce(CASE i.type
+      WHEN 'command_execution' THEN replace(replace(substr(json_extract(i.payload_json, '\$.input'), 1, 160), char(10), ' '), char(13), ' ')
+      WHEN 'dynamic_tool' THEN json_extract(i.payload_json, '\$.toolName')
+      WHEN 'subagent' THEN substr(json_extract(i.payload_json, '\$.title'), 1, 120)
+    END, '')) AS step
+  FROM orchestration_v2_projection_turn_items i
+  WHERE i.type IN ('command_execution', 'dynamic_tool', 'subagent') AND i.status IN ('pending', 'running', 'waiting')
+    AND NOT (i.type = 'dynamic_tool' AND json_extract(i.payload_json, '\$.input.persistent') IS 1)
+    AND coalesce((SELECT r.status FROM orchestration_v2_projection_runs r WHERE r.run_id = i.run_id), '') <> 'rolled_back'
+  UNION ALL
+  SELECT pt.thread_id, 2, json_array('background', replace(substr(coalesce(json_extract(b.value, '\$.description'), ''), 1, 160), char(10), ' '))
+  FROM orchestration_v2_projection_provider_threads pt
+  JOIN orchestration_v2_projection_threads t ON t.thread_id = pt.thread_id
+  JOIN json_each(pt.payload_json, '\$.pendingBackgroundTasks') b
+  WHERE coalesce(json_extract(t.payload_json, '\$.activeProviderThreadId'), pt.provider_thread_id) = pt.provider_thread_id
+  UNION ALL
+  SELECT t.thread_id, 0, json_array('watch_pr', CAST(json_extract(w.value, '\$.number') AS TEXT))
+  FROM orchestration_v2_projection_threads t
+  JOIN json_each(t.payload_json, '\$.pullRequests') w
+  WHERE json_extract(w.value, '\$.watch') IS NOT NULL AND coalesce(json_extract(w.value, '\$.source'), '') <> 'stack-dismissed'
+    AND t.deleted_at IS NULL AND t.archived_at IS NULL
+), waits AS (
+  -- A turn that ended with pending work is waiting, not done (T3 says
+  -- "Waiting" and holds the completion). A failed one still shows as failed.
+  SELECT r.run_id, r.thread_id, r.completed_at AS since
+  FROM orchestration_v2_projection_runs r
+  WHERE r.thread_id IN (SELECT thread_id FROM pend) AND r.thread_id NOT IN (SELECT thread_id FROM live)
+    AND r.status IN ('completed', 'cancelled', 'interrupted')
+    AND r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
+                     WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
 ), ended AS (
   -- Only a thread's latest run counts: a failure an earlier run had is history.
   SELECT r.run_id, r.thread_id, r.status, coalesce(json_extract(r.payload_json, '\$.startedAt'), r.requested_at) AS since,
@@ -47,9 +96,12 @@ WITH live AS (
         OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items i
           WHERE i.thread_id = r.thread_id AND i.run_id = r.run_id AND i.type = 'error' AND i.status = 'failed'
             AND json_extract(i.payload_json, '\$.failure.resetAt') > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-12 hours')))))
-    AND r.thread_id NOT IN (SELECT thread_id FROM live)
+    AND r.thread_id NOT IN (SELECT thread_id FROM live) AND r.thread_id NOT IN (SELECT thread_id FROM waits)
 ), act AS (
-  SELECT thread_id, since, NULL AS ended, NULL AS outcome, running, NULL AS run_id FROM live
+  SELECT thread_id, since, NULL AS ended, CASE WHEN thread_id IN (SELECT thread_id FROM blocked) THEN 'blocked' END AS outcome,
+    running, NULL AS run_id FROM live
+  UNION ALL
+  SELECT thread_id, since, NULL, 'waiting', 1, run_id FROM waits
   UNION ALL
   SELECT thread_id, since, ended, status, 1, run_id FROM ended
 ), ask AS (
@@ -76,6 +128,7 @@ WITH live AS (
       WHEN x.outcome = 'failed' THEN 'failed'
       WHEN a.kind IN ('command', 'file-read', 'file-change', 'permission') THEN 'perm'
       WHEN a.thread_id IS NOT NULL THEN 'input'
+      WHEN x.outcome IN ('waiting', 'blocked') THEN 'waiting'
       WHEN x.running = 0 THEN 'starting'
       ELSE 'working'
     END AS state,
@@ -95,7 +148,9 @@ WITH live AS (
       WHERE i.thread_id = t.thread_id AND i.type = 'user_input_request'
         AND json_extract(i.payload_json, '\$.requestId') = a.runtime_request_id
     ), '') ELSE '' END AS question,
-    CASE WHEN x.ended IS NULL THEN (
+    CASE WHEN x.outcome = 'waiting' THEN (SELECT p.step FROM pend p WHERE p.thread_id = t.thread_id ORDER BY p.prio LIMIT 1)
+      WHEN x.outcome = 'blocked' THEN json_array('wait_thread', '')
+      WHEN x.ended IS NULL THEN (
       SELECT json_array(i.type, coalesce(CASE i.type
         WHEN 'command_execution' THEN replace(replace(substr(json_extract(i.payload_json, '\$.input'), 1, 160), char(10), ' '), char(13), ' ')
         WHEN 'file_change' THEN substr(json_extract(i.payload_json, '\$.fileName'), -120)
@@ -123,7 +178,7 @@ WITH live AS (
       AND coalesce(json_extract(t.payload_json, '\$.snoozedUntil'), '') < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
   -- Most urgent first, so the cap never drops a question for a finished thread.
   ORDER BY CASE WHEN state IN ('input', 'perm') THEN 0 WHEN state = 'failed' THEN 1
-                WHEN state IN ('working', 'starting') THEN 2 ELSE 3 END, since DESC
+                WHEN state IN ('working', 'starting') THEN 2 WHEN state = 'waiting' THEN 3 ELSE 4 END, since DESC
   LIMIT 50
 )
 SELECT json_group_array(json_object('id', id, 'title', substr(title, 1, 120),
