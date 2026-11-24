@@ -40,7 +40,7 @@ rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-t3-live/plan.json"   # its 
 - `T3 3 live`: only running threads.
 - `T3 3·1·1`: a mix, as counts in T3's phase colors: running (sky), questions (indigo), approvals (amber), stopped (red), waiting and offline (gray). Hover for the names.
 - `T3 Answer` / `T3 Approve`: the one thread needs you.
-- `T3 Waiting` / `T3 2 waiting`: T3's own "Waiting": the turn ended, but the thread still watches a pull request whose checks are running (a deploy, CI) or that it waits to merge, has background work it is waiting for (a delegated thread, a task it will resume after), or waits on another thread. A dev server left running doesn't count, as in T3. It isn't done, so it never says Done.
+- `T3 Waiting` / `T3 2 waiting`: T3's own "Waiting": the turn ended, but the thread still watches a pull request whose checks are running (a deploy, CI) or that it waits to merge, has background work it is waiting for (a delegated thread, a task it will resume after), or waits on another thread. A dev server left running doesn't count, as in T3. It isn't done, so it never says Done while it waits; when the wait ends with its work finished it says Done, and if that work was cancelled it just leaves the list.
 - `T3 Failed` / `T3 Limit` / `T3 Offline`: the one thread stopped, hit a usage limit, or its machine stopped answering.
 - `T3 Done`: shown for a few seconds when a thread finishes; a waiting question or approval is never covered by it.
 

@@ -57,5 +57,5 @@ want="1=waiting 2=done 4=done 6=waiting 7=waiting 9=working"
 [ "$got" = "$want" ] || { echo "feed test failed: got '$got', want '$want'" >&2; exit 1; }
 # Done after a wait is timed by the wait's end, not the turn's.
 ended=$(printf '%s' "$out" | jq -r '.threads[] | select(.id[-1:] == "2") | .ended')
-[ "$ended" \> "$(date -u -d '-60 seconds' +%Y-%m-%dT%H:%M:%S)" ] || { echo "feed test failed: done after a wait ended at $ended" >&2; exit 1; }
+[ "$ended" \> "$(sqlite3 :memory: "select strftime('%Y-%m-%dT%H:%M:%S', 'now', '-60 seconds')")" ] || { echo "feed test failed: done after a wait ended at $ended" >&2; exit 1; }
 echo "feed tests passed"
