@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "siam.t3-live",
+  "name": "T3 Live",
+  "version": "1.2.0",
+  "author": "EhsanulHaqueSiam",
+  "description": "Live T3 Code agent threads in the bar: how many are working, which ones wait on you, and their questions. Covers this machine and any ssh hosts.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "T3 Live",
+    "description": "T3 3 live | 1 input. Click for each thread; threads waiting on you show their question and an Answer button.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "sshHosts": ""
+    },
+    "schema": [
+      {
+        "key": "sshHosts",
+        "type": "string",
+        "label": "Other machines",
+        "defaultValue": "",
+        "description": "Other machines running T3 Code, as ssh hosts separated by commas (e.g. mac, server). Each needs key-based ssh and sqlite3."
+      }
+    ]
+  },
+  "license": "MIT"
+}
