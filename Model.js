@@ -176,7 +176,9 @@ function face(c, flash, numbersOnly) {
   ;[["live", "working"], ["input", "input"], ["perm", "perm"], ["stopped", "failed"], ["waiting", "waiting"], ["stale", "stale"]].forEach(function(p) {
     if (!(n[p[0]] > 0)) return
     if (out.length > 1 && !numbersOnly) out.push({ kind: "sep", phase: "" })
-    out.push({ kind: "num", arg: String(n[p[0]]), phase: p[1] })
+    // Waiting and offline share the muted gray, so each carries its glyph.
+    var icon = !numbersOnly && (p[1] === "waiting" || p[1] === "stale") ? glyph(p[1]) : ""
+    out.push({ kind: "num", arg: String(n[p[0]]), phase: p[1], icon: icon })
   })
   return out
 }
@@ -290,6 +292,14 @@ function prLook(pr, pal) {
 }
 
 
+// A plan outlives the feed's own window for its stop (stopped rows leave 12 h
+// after the stop, limits 12 h after the reset): then nothing can use it.
+// Plans end this way, not by host, so a machine reached under a new name keeps
+// them, and one removed for good leaves nothing behind.
+function planExpired(entry, now) {
+  return now > Math.max(entry.resetAt || 0, entry.ended || 0, entry.dismissed || 0) + 13 * 3600000
+}
+
 // A stopped thread the user dismissed stays out of sight until it stops
 // again (a new run ends at a new time).
 function dismissed(t, plan) {
@@ -344,6 +354,18 @@ function transitions(prev, threads) {
   return threads.filter(function(t) {
     return TOASTS.indexOf(t.state) !== -1 && prev[t.id] !== stateKey(t)
   })
+}
+
+// A wait that ends with no new turn (an unwatch, a background task that just
+// stops) is past the feed's 2-minute done window, so the thread leaves without
+// a "done": these are the ones to announce as finished. Only from a full
+// snapshot (under the 50-row cap), where a missing thread is really gone.
+function finishedWaits(prev, threads, now) {
+  if (threads.length >= 50) return []
+  var ids = {}
+  threads.forEach(function(t) { ids[t.id] = true })
+  return prev.filter(function(t) { return t.state === "waiting" && !ids[t.id] })
+    .map(function(t) { return Object.assign({}, t, { state: "done", ended: now }) })
 }
 
 function keys(threads) {

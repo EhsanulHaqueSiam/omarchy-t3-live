@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
 const src = readFileSync(new URL("../Model.js", import.meta.url), "utf8").replace(".pragma library", "")
-const names = "parseHosts parseLine owner merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
+const names = "parseHosts parseLine owner planExpired finishedWaits merge count stateKey transitions keys asking markStale chip face glyph summary limitPhase snoozed dismissed actions tooltip toastText readable inkOn contrast phaseColor projectColor prLook t3Palette luminance stepText prText permText escapeMarkup safeArg elapsed threadUrl"
 const M = vm.runInThisContext(`(() => { ${src}\nreturn { ${names.split(" ").join(", ")} } })()`)
 
 const env = "7262cf01-c98b-4af8-af5f-e943001b545d"
@@ -64,6 +64,9 @@ assert.deepEqual(M.chip(w(1)), ["waiting", "", "waiting"])
 assert.deepEqual(M.chip(w(2)), ["waitingCount", "2", "waiting"])
 assert.equal(M.chip(w(1, 2)), null)
 assert.deepEqual(M.face(w(1, 2), "").filter(x => x.kind === "num").map(x => x.phase + x.arg), ["working2", "waiting1"])
+// The two grays tell themselves apart by glyph; vertical bars stay numbers only.
+assert.deepEqual(M.face({ live: 1, input: 0, perm: 0, waiting: 1, stale: 1 }, "").filter(x => x.kind === "num").map(x => x.icon), ["", M.glyph("waiting"), M.glyph("stale")])
+assert.equal(M.face({ live: 1, input: 0, perm: 0, waiting: 1, stale: 0 }, "", true).filter(x => x.icon).length, 0)
 assert.deepEqual(M.tooltip(w(1, 2)), [["tip.working", 2], ["tip.waiting", 1]])
 assert.deepEqual(M.summary([t("a", "waiting", 1), t("b", "done", 1, 2)]), ["summary.waiting", 1])
 assert.deepEqual(M.summary([t("a", "waiting", 1), t("b", "working", 1)]), ["summary.working", 1])
@@ -249,5 +252,17 @@ assert.deepEqual(M.owner(routes, {}, "mac", env), { host: "mac-wan", live: true 
 assert.deepEqual(M.owner(routes, { "mac-wan": 1 }, "mac", env), { host: "mac-wan", live: false })
 assert.equal(M.owner(routes, {}, "box", id), null)
 assert.equal(M.owner({ mac: null }, {}, "x", env), null)
+
+// Plans end 13 h after their stop or reset, whatever host showed them.
+const H = 3600000
+assert.equal(M.planExpired({ resetAt: 10 * H, ended: 1 * H, dismissed: 0 }, 22 * H), false)
+assert.equal(M.planExpired({ resetAt: 10 * H, ended: 1 * H, dismissed: 0 }, 24 * H), true)
+assert.equal(M.planExpired({ resetAt: 0, ended: 0, dismissed: 5 * H }, 17 * H), false)
+assert.equal(M.planExpired({ resetAt: 0, ended: 0, dismissed: 5 * H }, 19 * H), true)
+
+// A wait that ends with no new turn still finishes, once; a capped snapshot proves nothing.
+assert.deepEqual(M.finishedWaits([t("w", "waiting", 1), t("x", "working", 1)], [t("x", "done", 1, 5)], 9).map(x => x.id + ":" + x.state + "@" + x.ended), ["w:done@9"])
+assert.deepEqual(M.finishedWaits([t("w", "waiting", 1)], [t("w", "working", 1)], 9), [])
+assert.deepEqual(M.finishedWaits([t("w", "waiting", 1)], Array.from({ length: 50 }, (_, i) => t("n" + i, "working", 1)), 9), [])
 
 console.log("model tests passed")

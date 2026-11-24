@@ -2,7 +2,7 @@
 
 A compact island for [T3 Code](https://t3.codes) agents in the [Omarchy](https://omarchy.org) bar.
 
-<p align="center"><img src="docs/island.gif" alt="The island changing state: T3 Working, T3 3 live, a colored mix, T3 Answer, T3 Done, T3 Waiting, T3 Limit" width="600"><br><sub><a href="docs/island.mp4">Watch it as video (MP4, 60 fps)</a></sub></p>
+<p align="center"><img src="docs/island.gif" alt="The island changing state: T3 Working, T3 3 live, a colored mix, T3 Answer, T3 Waiting, T3 Done, T3 Limit, then a mix with a waiting count" width="600"><br><sub><a href="docs/island.mp4">Watch it as video (MP4, 60 fps)</a></sub></p>
 
 It speaks the language of T3 Code's own mobile live notification: one word when one thread is running, colored counts when several are, and a short "Done" when one finishes. Click it for the list.
 
@@ -34,13 +34,13 @@ rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-t3-live/plan.json"   # its 
 
 ## The island
 
-<img src="docs/states.png" alt="Island states: T3 Working, T3 3 live, T3 3·1·1, T3 Answer, T3 Done, T3 Waiting, T3 Limit, and a mix of five counts" width="300" align="right">
+<img src="docs/states.png" alt="Island states: T3 Working, T3 3 live, T3 3·1·1, T3 Answer, T3 Waiting, T3 Done, T3 Limit, and a mix of five counts with the waiting glyph" width="300" align="right">
 
 - `T3 Working`: one thread is running.
 - `T3 3 live`: only running threads.
 - `T3 3·1·1`: a mix, as counts in T3's phase colors: running (sky), questions (indigo), approvals (amber), stopped (red), waiting and offline (gray). Hover for the names.
 - `T3 Answer` / `T3 Approve`: the one thread needs you.
-- `T3 Waiting` / `T3 2 waiting`: T3's own "Waiting": the turn ended, but the thread still watches a pull request (a deploy, CI), has background work running, or waits on another thread. It isn't done, so it never says Done.
+- `T3 Waiting` / `T3 2 waiting`: T3's own "Waiting": the turn ended, but the thread still watches a pull request whose checks are running (a deploy, CI) or that it waits to merge, has background work it is waiting for (a delegated thread, a task it will resume after), or waits on another thread. A dev server left running doesn't count, as in T3. It isn't done, so it never says Done.
 - `T3 Failed` / `T3 Limit` / `T3 Offline`: the one thread stopped, hit a usage limit, or its machine stopped answering.
 - `T3 Done`: shown for a few seconds when a thread finishes; a waiting question or approval is never covered by it.
 
@@ -55,7 +55,7 @@ One row per thread: the title, one line of what is happening now, and a line wit
 | State | The line under the title | Buttons |
 | --- | --- | --- |
 | Working, starting | Its current step: `Editing Hero.tsx`, `$ pnpm test` | none (elapsed time) |
-| Waiting | What it waits on: `Watching PR #76`, `$ gh run watch`, `Waiting on another thread` | none (time waiting) |
+| Waiting | What it waits on: `Watching PR #76`, `Subagent: Watch the deploy`, `Waiting on another thread` | none (time waiting) |
 | Question | The question | **Answer**: opens the thread in T3 |
 | Approval | What it wants: `Wants to run: pnpm test` | **Approve**: opens the thread in T3 |
 | Failed | The error | **Resume**, **Dismiss** |

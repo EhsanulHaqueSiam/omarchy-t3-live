@@ -18,16 +18,13 @@ Item {
   // setting never rebuilds the feeds.
   property string hostsText: ""
   property bool notify: true
-  // True once a widget has passed its settings in; until then a plan for a
-  // remote machine must not look like one for a removed machine.
-  property bool hostsReady: false
   // "t3": T3's own vivid phase colors (the default); "theme": the Omarchy
   // theme's palette. Surfaces, text and borders follow the theme either way.
   property string colors: "t3"
   // Linked T3 environments this machine can ssh into, found by discover.sh
   // (on by default; the widget's "Linked machines" setting).
   property bool linked: true
-  // Plans are pruned only once discovery has said which machines are linked.
+  // True after discovery's first complete answer; until then it retries every minute.
   property bool discovered: false
   property string linkedText: ""
   readonly property var hosts: {
@@ -177,6 +174,7 @@ Item {
     delete root.staleSince[host]
     var first = !(host in root.seen)
     var events = first ? [] : Model.transitions(root.seen[host], parsed.threads)
+    if (!first && root.sources[host]) events = events.concat(Model.finishedWaits(root.sources[host].threads, parsed.threads, Date.now()))
     root.seen[host] = Model.keys(parsed.threads)
     setSource(host, parsed)
     tidy(parsed.env, host, parsed.threads)
@@ -185,15 +183,22 @@ Item {
 
   // Plans and "Resuming" marks end once the thread is no longer stopped, a
   // newer limit replaced the one they were for, or it stopped again since a
-  // dismissal. A plan follows the host that now shows its machine.
+  // dismissal.
   function tidy(env, host, list) {
     var byId = {}
     list.forEach(function(t) { byId[t.id] = t })
     var plan = Object.assign({}, root.plan), resuming = Object.assign({}, root.resuming), changed = false
     Object.keys(plan).forEach(function(key) {
       var parts = key.split("|"), t = byId[parts[1]], e = plan[key]
-      if (parts[0] !== env) return
-      if (e.host !== host) { plan[key] = e = Object.assign({}, e, { host: host }); changed = true }
+      if (parts[0] !== env) {
+        // Saved before plans followed the machine, under its host name: move it.
+        if (parts[0] !== host) return
+        delete plan[key]
+        changed = true
+        key = env + "|" + parts[1]
+        if (plan[key]) return
+        plan[key] = e
+      }
       // A thread missing from a full snapshot may only be past the row cap.
       if (!t) { if (list.length < 50) { delete plan[key]; changed = true } return }
       // A plan belongs to one stop: the same reset and the same end time.
@@ -277,7 +282,7 @@ Item {
     if (field !== "dismissed" && (t.state !== "limited" || !t.failure)) return
     if (field === "dismissed" && !Model.stopped(t)) return
     var key = planKey(t), plan = Object.assign({}, root.plan)
-    var entry = Object.assign({ host: t.host, resetAt: t.failure ? t.failure.resetAt : 0, ended: t.ended, resume: false, snooze: false, dismissed: 0 }, plan[key])
+    var entry = Object.assign({ resetAt: t.failure ? t.failure.resetAt : 0, ended: t.ended, resume: false, snooze: false, dismissed: 0 }, plan[key])
     entry[field] = value
     if (!entry.resume && !entry.snooze && !entry.dismissed) delete plan[key]
     else plan[key] = entry
@@ -289,22 +294,17 @@ Item {
   function snooze(t) { setPlanned(t, "snooze", true) }
   function unsnooze(t) { setPlanned(t, "snooze", false) }
 
-  // Plans for a machine that is no longer in the settings can never be
-  // tidied by its feed: drop them.
-  function pruneHosts() {
-    var plan = Object.assign({}, root.plan), changed = false
+  // Plans past any use end on their own (Model.planExpired), checked hourly
+  // and on load; a feed that still shows the thread tidies them sooner.
+  function pruneExpired() {
+    var plan = Object.assign({}, root.plan), changed = false, now = Date.now()
     Object.keys(plan).forEach(function(key) {
-      if (root.hosts.indexOf(plan[key].host) === -1) { delete plan[key]; changed = true }
+      if (Model.planExpired(plan[key], now)) { delete plan[key]; changed = true }
     })
     if (changed) setPlan(plan)
   }
-  // Debounced: at startup the hosts arrive from the widget a moment after the
-  // plan loads, and a plan for "mac" must not be dropped before they do.
-  onHostsChanged: { syncHosts(); pruneTimer.restart() }
-  onHostsReadyChanged: pruneTimer.restart()
-  onDiscoveredChanged: pruneTimer.restart()
-  Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded && root.hostsReady && (root.discovered || !root.linked)) root.pruneHosts() }
-  property bool planLoaded: false
+  Timer { interval: 3600000; repeat: true; running: true; onTriggered: root.pruneExpired() }
+  onHostsChanged: syncHosts()
 
   function setPlan(plan) {
     root.plan = plan
@@ -319,18 +319,18 @@ Item {
     var plan = {}
     Object.keys(data).slice(0, 100).forEach(function(key) {
       var v = data[key]
-      // Environment|thread; entries from before plans followed the machine are dropped.
-      if (!/^[0-9a-fA-F-]{8,64}\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
-      plan[key] = { host: typeof v.host === "string" && /^[A-Za-z0-9_.@-]*$/.test(v.host) ? v.host : "", resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, ended: typeof v.ended === "number" ? v.ended : 0,
+      // Environment|thread, or host|thread from before plans followed the
+      // machine (tidy moves those on the host's first snapshot).
+      if (!/^[A-Za-z0-9_.@-]*\|[0-9a-fA-F-]{8,64}$/.test(key) || !v || typeof v !== "object") return
+      plan[key] = { resetAt: typeof v.resetAt === "number" ? v.resetAt : 0, ended: typeof v.ended === "number" ? v.ended : 0,
         resume: v.resume === true, snooze: v.snooze === true,
         dismissed: typeof v.dismissed === "number" ? v.dismissed : 0 }
     })
     root.plan = plan
-    root.planLoaded = true
     // Check the loaded plan against what the feeds already reported.
     // Not a stale machine's: its stopped threads are hidden, not gone.
     Object.keys(root.sources).forEach(function(h) { if (root.sources[h] && !(h in root.staleSince)) root.tidy(root.sources[h].env, h, root.sources[h].threads) })
-    pruneTimer.restart()
+    pruneExpired()
   }
 
   // A resume whose time has come, and the clock that makes limits reset.
@@ -407,8 +407,6 @@ Item {
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadPlan(text())
-    // No plan file yet: nothing to load, and nothing to prune.
-    onLoadFailed: root.planLoaded = true
   }
 
   // ---- Toasts ----

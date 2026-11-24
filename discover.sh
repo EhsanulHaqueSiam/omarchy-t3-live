@@ -14,7 +14,7 @@ command -v t3 >/dev/null || exit 1
 envs=$(timeout 20 t3 environment list --json 2>/dev/null) || exit 1
 # Anything off-shape is a failed answer, never "no linked machines".
 printf '%s' "$envs" | jq -e 'type == "array" and all(.[]; type == "object" and (.environmentId | type) == "string"
-  and ((.urls // []) | type == "array" and all(.[]; type == "string")))' >/dev/null 2>&1 || exit 1
+  and (.urls == null or (.urls | type == "array" and all(.[]; type == "string"))))' >/dev/null 2>&1 || exit 1
 
 # Without pipefail a failing jq would still end in "ok": check it on its own.
 pairs=$(printf '%s' "$envs" | jq -r '.[] | objects | (.environmentId | strings) as $id | (.urls // [])[] | strings | select(test("t3coderelay") | not) | "\($id) \(.)"' 2>/dev/null) || exit 1

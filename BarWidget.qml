@@ -77,7 +77,6 @@ BarWidget {
   // put back defaults the other monitors' widgets still set.
   Binding { target: root.service; when: !!root.service; property: "hostsText"; value: String(root.setting("sshHosts", "")); restoreMode: Binding.RestoreNone }
   Binding { target: root.service; when: !!root.service; property: "notify"; value: root.setting("notify", true) === true; restoreMode: Binding.RestoreNone }
-  Binding { target: root.service; when: !!root.service; property: "hostsReady"; value: true; restoreMode: Binding.RestoreNone }
   Binding { target: root.service; when: !!root.service; property: "linked"; value: root.setting("linked", true) === true; restoreMode: Binding.RestoreNone }
   Binding { target: root.service; when: !!root.service; property: "colors"; value: root.setting("colors", "T3") === "Theme" ? "theme" : "t3"; restoreMode: Binding.RestoreNone }
 
@@ -217,6 +216,8 @@ BarWidget {
             if (m.kind === "mark") return "T3"
             if (m.kind === "glyph") return Model.glyph(m.phase)
             if (m.kind === "word") return m.arg !== "" ? strings.t(m.key).arg(m.arg) : strings.t(m.key)
+            // A full space: the nerd-font glyph draws wider than its advance.
+            if (m.icon) return m.icon + " " + m.arg
             return m.arg || ""
           }
           color: seg.modelData.phase ? root.phaseOn(seg.modelData.phase, root.pal.bg, seg.modelData.kind === "glyph" ? 3 : 4.5) : root.pal.fg
@@ -428,7 +429,7 @@ BarWidget {
           // Small text: lifted to 4.5:1 and drawn at full strength.
           var small = function(hex) { return row.dimmed ? String(row.muted) : Model.readable(hex, String(popup.surface), root.pal.fg, 4.5) }
           if (t.project) parts.push(["󰉋", t.project, small(Model.projectColor(t.projectColor, root.pal))])
-          parts.push([t.host === "" ? "󰌢" : "󰒋", t.host === "" ? strings.t("thisMachine") : t.host, small(root.pal.cyan)])
+          parts.push([t.host === "" ? "󰌢" : "󰒋", t.host === "" ? strings.t("thisMachine") : t.host, small(root.pal.cyan), "machine"])
           var pr = Model.prLook(t.pr, root.pal)
           if (pr) parts.push([pr[0], "#" + t.pr.n, small(pr[1])])
           // Octicons issue-opened.
@@ -563,6 +564,8 @@ BarWidget {
                     // The project gives way first, so the machine and PR stay in view.
                     width: index === 0 && row.t.project ? Math.min(implicitWidth, metaLine.width * 0.4)
                       : index <= 1 ? Math.min(implicitWidth, metaLine.width * 0.35) : implicitWidth
+                    // A machine name that would be cut ("this ma…") shows as its icon alone.
+                    visible: !(modelData[3] === "machine" && implicitWidth > metaLine.width * 0.35)
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
                     text: modelData[1]

@@ -43,23 +43,29 @@ WITH live AS (
   SELECT i.thread_id
   FROM orchestration_v2_projection_turn_items i
   JOIN orchestration_v2_projection_runs r ON r.run_id = i.run_id AND r.status = 'running'
+  -- Written so SQLite can use T3's partial index on active items.
   WHERE i.status IN ('pending', 'running', 'waiting') AND i.status <> 'pending'
     AND i.type IN ('command_execution', 'dynamic_tool', 'subagent', 'file_change', 'file_search', 'web_search', 'compaction')
     AND NOT (i.type = 'subagent' AND json_extract(i.payload_json, '\$.origin') = 'app_owned')
   GROUP BY i.thread_id
-  HAVING min(i.type = 'dynamic_tool' AND (json_extract(i.payload_json, '\$.toolName') LIKE '%t3_thread_wait'
-    OR (json_extract(i.payload_json, '\$.toolName') LIKE '%delegate_task' AND json_extract(i.payload_json, '\$.input.mode') = 'wait'))) = 1
+  -- T3's own tool, under the server names T3 answers to (shortcut: the looser
+  -- ACP prefixes T3 also parses are not matched; none appear in practice).
+  -- Every other item counts as 0, never NULL, so it always breaks the wait.
+  HAVING min(coalesce(i.type = 'dynamic_tool' AND (lower(json_extract(i.payload_json, '\$.toolName')) IN ('t3_thread_wait', 'mcp__t3-code__t3_thread_wait', 'mcp__t3_code__t3_thread_wait', 'mcp__t3code__t3_thread_wait', 'mcp__t3-code-direct__t3_thread_wait', 'mcp__t3_code_direct__t3_thread_wait', 't3-code.t3_thread_wait', 't3-code:t3_thread_wait', 't3-code/t3_thread_wait', 't3_code.t3_thread_wait', 't3_code:t3_thread_wait', 't3_code/t3_thread_wait', 't3code.t3_thread_wait', 't3code:t3_thread_wait', 't3code/t3_thread_wait', 't3-code-direct.t3_thread_wait', 't3-code-direct:t3_thread_wait', 't3-code-direct/t3_thread_wait', 't3_code_direct.t3_thread_wait', 't3_code_direct:t3_thread_wait', 't3_code_direct/t3_thread_wait')
+    OR (lower(json_extract(i.payload_json, '\$.toolName')) IN ('delegate_task', 'mcp__t3-code__delegate_task', 'mcp__t3_code__delegate_task', 'mcp__t3code__delegate_task', 'mcp__t3-code-direct__delegate_task', 'mcp__t3_code_direct__delegate_task', 't3-code.delegate_task', 't3-code:delegate_task', 't3-code/delegate_task', 't3_code.delegate_task', 't3_code:delegate_task', 't3_code/delegate_task', 't3code.delegate_task', 't3code:delegate_task', 't3code/delegate_task', 't3-code-direct.delegate_task', 't3-code-direct:delegate_task', 't3-code-direct/delegate_task', 't3_code_direct.delegate_task', 't3_code_direct:delegate_task', 't3_code_direct/delegate_task') AND json_extract(i.payload_json, '\$.input.mode') = 'wait')), 0)) = 1
 ), pend AS (
-  -- T3's pending background work (derivePendingBackgroundWork): background
-  -- items still running, the provider's own background tasks, and pull
-  -- request watches; prio picks the one a row shows.
+  -- T3's pending background work (derivePendingBackgroundWork), only what
+  -- holds the thread's completion (backgroundWorkHoldsCompletion, which the
+  -- sidebar's "Waiting" uses): subagents and background tool calls always; a
+  -- command or monitor only when the agent marked it awaited (a dev server
+  -- left running is not a wait); a pull request watch while its checks run or
+  -- it waits for the merge. prio picks the one a row shows.
   SELECT i.thread_id, 1 AS prio, json_array(i.type, coalesce(CASE i.type
-      WHEN 'command_execution' THEN replace(replace(substr(json_extract(i.payload_json, '\$.input'), 1, 160), char(10), ' '), char(13), ' ')
       WHEN 'dynamic_tool' THEN json_extract(i.payload_json, '\$.toolName')
       WHEN 'subagent' THEN substr(json_extract(i.payload_json, '\$.title'), 1, 120)
     END, '')) AS step
   FROM orchestration_v2_projection_turn_items i
-  WHERE i.type IN ('command_execution', 'dynamic_tool', 'subagent') AND i.status IN ('pending', 'running', 'waiting')
+  WHERE i.type IN ('dynamic_tool', 'subagent') AND i.status IN ('pending', 'running', 'waiting')
     AND NOT (i.type = 'dynamic_tool' AND json_extract(i.payload_json, '\$.input.persistent') IS 1)
     AND coalesce((SELECT r.status FROM orchestration_v2_projection_runs r WHERE r.run_id = i.run_id), '') <> 'rolled_back'
   UNION ALL
@@ -68,11 +74,14 @@ WITH live AS (
   JOIN orchestration_v2_projection_threads t ON t.thread_id = pt.thread_id
   JOIN json_each(pt.payload_json, '\$.pendingBackgroundTasks') b
   WHERE coalesce(json_extract(t.payload_json, '\$.activeProviderThreadId'), pt.provider_thread_id) = pt.provider_thread_id
+    AND (json_extract(b.value, '\$.awaited') IS 1 OR json_extract(b.value, '\$.kind') IN ('subagent', 'background_task'))
   UNION ALL
   SELECT t.thread_id, 0, json_array('watch_pr', CAST(json_extract(w.value, '\$.number') AS TEXT))
   FROM orchestration_v2_projection_threads t
   JOIN json_each(t.payload_json, '\$.pullRequests') w
   WHERE json_extract(w.value, '\$.watch') IS NOT NULL AND coalesce(json_extract(w.value, '\$.source'), '') <> 'stack-dismissed'
+    AND (json_type(w.value, '\$.watch.checksPending') IS NOT 'false' OR json_extract(w.value, '\$.watch.until') IS 'merged'
+      OR json_extract(w.value, '\$.snapshot.state') IS 'merged')
     AND t.deleted_at IS NULL AND t.archived_at IS NULL
 ), waits AS (
   -- A turn that ended with pending work is waiting, not done (T3 says
@@ -83,6 +92,12 @@ WITH live AS (
     AND r.status IN ('completed', 'cancelled', 'interrupted')
     AND r.ordinal = (SELECT max(o.ordinal) FROM orchestration_v2_projection_runs o
                      WHERE o.thread_id = r.thread_id AND o.status <> 'queued')
+  UNION ALL
+  -- A thread that never ran can still wait on a pull request watch.
+  SELECT NULL, t.thread_id, json_extract(t.payload_json, '\$.updatedAt')
+  FROM orchestration_v2_projection_threads t
+  WHERE t.thread_id IN (SELECT thread_id FROM pend WHERE prio = 0)
+    AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs o WHERE o.thread_id = t.thread_id AND o.status <> 'queued')
 ), ended AS (
   -- Only a thread's latest run counts: a failure an earlier run had is history.
   SELECT r.run_id, r.thread_id, r.status, coalesce(json_extract(r.payload_json, '\$.startedAt'), r.requested_at) AS since,
