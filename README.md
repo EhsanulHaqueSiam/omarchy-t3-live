@@ -1,32 +1,12 @@
 # T3 Live
 
-An [Omarchy](https://omarchy.org) bar widget for [T3 Code](https://t3.codes) agents, styled after phone live updates.
+A compact island for [T3 Code](https://t3.codes) agents in the [Omarchy](https://omarchy.org) bar.
 
-It speaks the same language as T3 Code's own mobile live notification: the same phases (starting, working, question, approval, waiting, done, failed), the same words and the same phase colors.
+<p align="center"><img src="docs/island.gif" alt="The island changing state: T3 Working, T3 3 live, a colored mix, T3 Answer, T3 Done, T3 Limit" width="600"></p>
 
-The bar shows a compact black island, a little like the iPhone's Dynamic Island. When the state changes, its width eases to fit and the label cross-fades:
+It speaks the language of T3 Code's own mobile live notification: one word when one thread is running, colored counts when several are, and a short "Done" when one finishes. Click it for the list.
 
-- One thread says what it is doing: `T3  Working`, `T3  Answer`, `T3  Approve`, or `T3  Waiting` when its machine stopped answering.
-- Only working threads: `T3  3 live`.
-- A mix shows each count as a colored numeral: `T3  3·1·1` (working, questions, approvals).
-- When a thread finishes, `T3  Done` (or `Failed`) for a few seconds.
-- Nothing running: the pill hides.
-
-Click the pill for the list, headed like the live notification ("2 need you · 6 active"), with one entry per thread:
-
-- **Working / starting**: what it is doing right now ("Editing Hero.tsx", "$ pnpm test"), its project and machine, its pull request ("#214 checks failing"), and how long it has run.
-- **Question**: what it asks, and an **Answer** button that opens the thread in T3 Code.
-- **Approval**: what it wants to do ("Wants to run: pnpm test"), and an **Approve** button that opens the thread.
-- **Waiting**: its machine stopped answering; it stays for 10 minutes or until the machine is back.
-- **Failed**: the error, and **Resume**, which sends the thread T3's own "Continue where you left off." Failed threads stay listed for 12 hours, until you settle them in T3.
-- **Usage limit**: when it resets, and two choices: **On reset** resumes it the moment the limit resets, and **Snooze** hides it from the bar until then (**Wake** undoes it). If T3's own auto-resume is armed, the row says "Resumes 4:00 PM" and the plugin leaves it to T3. Once the limit has reset, **Resume** sends it on right away.
-- **Done**: how long it took; listed for 2 minutes.
-
-Anything that needs your input, a question or an approval, opens the thread in T3 Code itself, where you have its full context. Resuming and snoozing happen right in the list. A planned resume is kept in `~/.local/state/omarchy-t3-live/plan.json`, so it survives a restart. Resumes go through the `t3` CLI on the thread's own machine (over ssh for other machines).
-
-## Notifications
-
-A toast arrives when a thread starts waiting on you or finishes, with a button that opens it. If a question or permission is still waiting after 5 minutes, one critical toast follows. Turn toasts off with the widget's **Notifications** setting (`"notify": false` in its bar entry).
+<p align="center"><img src="docs/list.gif" alt="The list: an approval with Approve, a question with Answer, a failed thread with Resume and Dismiss, working threads with their current step, and a snoozed usage limit with Wake" width="420"></p>
 
 ## Install
 
@@ -34,23 +14,75 @@ A toast arrives when a thread starts waiting on you or finishes, with a button t
 omarchy plugin add https://github.com/EhsanulHaqueSiam/omarchy-t3-live.git --enable
 ```
 
-You need T3 Code on the same machine. It works with the default `~/.t3` folder, or with `T3CODE_HOME` if you set it. `sqlite3` and `jq` come with Omarchy.
+It needs T3 Code on the same machine, in `~/.t3` (or `T3CODE_HOME`). `sqlite3` and `jq` come with Omarchy. Resume uses T3's own `t3` command, which T3 installs.
 
-Links open in the T3 Code desktop app. If the app isn't installed, they open in this machine's T3 web UI.
+## The island
+
+<img src="docs/states.png" alt="Island states" width="300" align="right">
+
+- `T3 Working`: one thread is running.
+- `T3 3 live`: only running threads.
+- `T3 3·1·1`: a mix, as counts in T3's phase colors: running (sky), questions (indigo), approvals (amber), stopped (red), out of date (gray). Hover for the names.
+- `T3 Answer` / `T3 Approve`: the one thread needs you.
+- `T3 Failed` / `T3 Limit` / `T3 Waiting`: the one thread stopped, hit a usage limit, or its machine stopped answering.
+- `T3 Done`: shown for a few seconds when a thread finishes; a waiting question or approval is never covered by it.
+
+Nothing running and nothing stopped: the island fades out and gives its space back. It never animates on its own; it only moves when something changes.
+
+<br clear="right">
+
+## The list
+
+One row per thread: the title, one line of what is happening now, and project · machine · pull request. Each state shows only the buttons it needs:
+
+| State | The line under the title | Buttons |
+| --- | --- | --- |
+| Working, starting | Its current step: `Editing Hero.tsx`, `$ pnpm test` | none (elapsed time) |
+| Question | The question | **Answer**: opens the thread in T3 |
+| Approval | What it wants: `Wants to run: pnpm test` | **Approve**: opens the thread in T3 |
+| Failed | The error | **Resume**, **Dismiss** |
+| Usage limit | `Resets 4:00 PM` | **On reset** (resume when it resets), **Snooze** (hide until then) |
+| Usage limit, resume planned | `Resumes 4:00 PM` | **Cancel**, **Snooze** |
+| Usage limit, T3 will resume it | `Resumes 4:00 PM` | **Snooze** |
+| Usage limit, reset | `Limit reset` | **Resume**, **Dismiss** |
+| Snoozed | `Snoozed until 4:00 PM`, dimmed, at the end | **Wake** (only for snoozes made here) |
+| Out of date | `Waiting for an update`: its machine stopped answering | none |
+| Done | `Finished in 12:04`, for 2 minutes | none |
+
+Clicking a row opens its thread in T3. A long list scrolls.
+
+<p align="center"><img src="docs/all-states.png" alt="Every state in one list" width="320"></p>
+
+## What it does, and what it leaves out
+
+The bar is for a glance and the list is for choosing where to go. Anything that needs the thread's context, answering a question, approving a command, settling a thread, opens the thread in T3 Code, where you have all of it. The list only does what needs no context:
+
+- **Resume** sends the thread T3's own `Continue where you left off.` through the `t3` command on the thread's machine. One click sends once.
+- **On reset** resumes a usage-limited thread when its limit resets. If T3's own auto-resume is already armed for it, the plugin leaves it to T3.
+- **Snooze** hides a usage-limited thread until its limit resets.
+- **Dismiss** hides a failed thread here until it stops again. It does not settle the thread in T3: T3 has no way for other programs to settle a thread, so the plugin doesn't pretend to. Failed threads also leave on their own once you settle them in T3, or after 12 hours.
+
+Plans (on reset, snooze, dismiss) are kept in `~/.local/state/omarchy-t3-live/plan.json` and end on their own when the thread moves on. Everything else is read from T3, never written: there is no inline answering, no message box, no history, and no usage meters (Omarchy's Agents widget has those).
+
+## Notifications
+
+A toast arrives when a thread starts waiting on you, finishes, fails or hits a usage limit. Clicking a toast opens the thread; its buttons offer Resume, Resume at reset or Snooze where they apply. A question or approval still waiting after 5 minutes gets one more, critical toast. Turn toasts off with the widget's **Notifications** setting (`"notify": false` in its bar entry).
 
 ## Other machines
 
-To include threads running on other machines, add their ssh hosts under the widget's **Other machines** setting, or put them in its bar entry in `~/.config/omarchy/shell.json`:
+Add other machines running T3 Code as ssh hosts in the widget's **Other machines** setting, or in its bar entry in `~/.config/omarchy/shell.json`:
 
 ```json
 { "id": "siam.t3-live", "sshHosts": "mac, server" }
 ```
 
-Each host needs key-based ssh (the plugin connects with `BatchMode=yes`), plus T3 Code and `sqlite3`. macOS ships `sqlite3`. A host that can't be reached drops out of the counts, and the plugin tries it again every 30 seconds.
+Each host needs key-based ssh (the plugin connects with `BatchMode=yes`), T3 Code, `sqlite3` (macOS has it) and the `t3` command for Resume. Nothing gets installed there. A machine that stops answering shows its threads as out of date for 10 minutes, and the plugin keeps trying every 30 seconds.
+
+Opening a thread from another machine goes through the T3 Code desktop app, which knows your linked machines. Without the desktop app, it opens in this machine's T3 web UI, which only knows this machine's threads.
 
 ## Keyboard
 
-`omarchy-shell siam.t3-live toggle` opens the list on the focused monitor. To bind it to a key, add a line like this to `~/.config/hypr/bindings.conf`:
+`omarchy-shell siam.t3-live toggle` opens the list on the focused monitor. To bind it, add a line like this to `~/.config/hypr/bindings.conf`:
 
 ```
 bindd = SUPER ALT, T, T3 agents, exec, omarchy-shell siam.t3-live toggle
@@ -60,9 +92,13 @@ bindd = SUPER ALT, T, T3 agents, exec, omarchy-shell siam.t3-live toggle
 
 ## How it works
 
-`feed.sh` reads T3 Code's database read-only every 2 seconds and prints a line only when something changes. It runs once on this machine, and on each ssh host over one long-lived `ssh host sh -s` session, so nothing gets installed on those hosts. All bars share one set of feeds.
+`feed.sh` reads T3 Code's database (opened read-only) every 2 seconds and prints a line only when something changes. It runs once on this machine, and on each ssh host over one long-lived `ssh host sh -s`. If its query keeps failing (T3 changed its database), it stops, and that machine shows as out of date instead of frozen. All bars share one set of feeds.
 
-A thread counts as live while it has a run in progress. A pending question (or MCP elicitation, or sign-in) makes it **input**; a pending request to run a command, read or edit files makes it **perm**. It never writes to T3's database or sends anything to T3.
+## Limits
+
+- English only for now; other languages fall back to English.
+- Numbers and layout don't yet follow right-to-left languages.
+- It reads T3's internal database, so a T3 update can change what it can see; the feed then shows the machine as out of date rather than guessing.
 
 ## Development
 

@@ -190,6 +190,21 @@ Item {
   function snooze(t) { setPlanned(t, "snooze", true) }
   function unsnooze(t) { setPlanned(t, "snooze", false) }
 
+  // Plans for a machine that is no longer in the settings can never be
+  // tidied by its feed: drop them.
+  function pruneHosts() {
+    var plan = Object.assign({}, root.plan), changed = false
+    Object.keys(plan).forEach(function(key) {
+      if (root.hosts.indexOf(key.split("|")[0]) === -1) { delete plan[key]; changed = true }
+    })
+    if (changed) setPlan(plan)
+  }
+  // Debounced: at startup the hosts arrive from the widget a moment after the
+  // plan loads, and a plan for "mac" must not be dropped before they do.
+  onHostsChanged: pruneTimer.restart()
+  Timer { id: pruneTimer; interval: 3000; onTriggered: if (root.planLoaded) root.pruneHosts() }
+  property bool planLoaded: false
+
   function setPlan(plan) {
     root.plan = plan
     planFile.setText(JSON.stringify(plan) + "\n")
@@ -208,6 +223,8 @@ Item {
         dismissed: typeof v.dismissed === "number" ? v.dismissed : 0 }
     })
     root.plan = plan
+    root.planLoaded = true
+    pruneTimer.restart()
   }
 
   // A resume whose time has come, and the clock that makes limits reset.
@@ -259,6 +276,8 @@ Item {
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadPlan(text())
+    // No plan file yet: nothing to load, and nothing to prune.
+    onLoadFailed: root.planLoaded = true
   }
 
   // ---- Toasts ----
