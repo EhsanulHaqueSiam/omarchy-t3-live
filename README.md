@@ -1,3 +1,5 @@
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/logo/t3-live.svg"><img src="docs/logo/t3-live-light.svg" alt="T3 Live logo" width="96"></picture></p>
+
 # T3 Live
 
 A compact island for [T3 Code](https://t3.codes) agents in the [Omarchy](https://omarchy.org) bar.
