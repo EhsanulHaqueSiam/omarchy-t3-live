@@ -20,7 +20,8 @@
 #     "ended"}]}    when the run ended. Done threads stay listed for 2 minutes;
 #                   failed ones for 12 hours, limited ones until 12 hours past
 #                   their reset (so a resume planned for the reset still fires),
-#                   until settled or resumed, and not while T3 snoozes them
+#                   until settled or resumed, and not while T3 snoozes them.
+#                   Settling a Done thread removes it at once.
 # Run it locally with `sh feed.sh`, or on another machine with
 # `ssh <host> sh -s < feed.sh`. Pass `once` to print the current state and exit.
 # It only reads T3's database, opened read-only.
@@ -229,6 +230,8 @@ WITH live AS (
     -- A failed thread leaves once settled, and hides while T3 has it snoozed.
     AND (x.outcome IS NOT 'failed' OR (json_extract(t.payload_json, '\$.settledAt') IS NULL
       AND coalesce(json_extract(t.payload_json, '\$.snoozedUntil'), '') < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
+    -- A Done thread leaves early once settled after it finished.
+    AND (x.outcome IS NOT 'completed' OR coalesce(json_extract(t.payload_json, '\$.settledAt'), '') < x.ended)
   -- Most urgent first, so the cap never drops a question for a finished thread.
   ORDER BY CASE WHEN state IN ('input', 'perm') THEN 0 WHEN state = 'failed' THEN 1
                 WHEN state IN ('working', 'starting') THEN 2 WHEN state = 'waiting' THEN 3 ELSE 4 END, since DESC

@@ -23,15 +23,18 @@ INSERT INTO orchestration_v2_projection_threads (thread_id, title, project_id, p
 SELECT 'eeeeeeee-0000-4000-8000-00000000000' || k, k, 'p', CASE k
   WHEN '7' THEN '{"pullRequests":[{"number":7,"watch":{"checksPending":true},"source":"link"}]}'
   WHEN '8' THEN '{"pullRequests":[{"number":8,"watch":{"checksPending":false},"source":"link"}]}'
+  WHEN '0' THEN json_object('settledAt', strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 seconds'))
   ELSE '{}' END
-FROM (SELECT '1' k UNION SELECT '2' UNION SELECT '3' UNION SELECT '4' UNION SELECT '5' UNION SELECT '6' UNION SELECT '7' UNION SELECT '8' UNION SELECT '9');
+FROM (SELECT '0' k UNION SELECT '1' UNION SELECT '2' UNION SELECT '3' UNION SELECT '4' UNION SELECT '5' UNION SELECT '6' UNION SELECT '7' UNION SELECT '8' UNION SELECT '9');
 
 -- 1 waits on a running subagent; 2 its subagent finished 30 s ago (Done);
 -- 3 its only wait was cancelled (no Done, not even the recent turn's);
 -- 4 finished 30 s ago with no wait (Done); 5 a persistent tool ended (nothing);
 -- 6 blocks on t3_thread_wait (waiting); 9 waits and runs other work (working);
--- 7 watches a PR with checks running (waiting); 8 its checks are done (nothing).
+-- 7 watches a PR with checks running (waiting); 8 its checks are done (nothing);
+-- 0 finished 30 s ago and was settled since (nothing).
 INSERT INTO orchestration_v2_projection_runs VALUES
+  ('r0', 'eeeeeeee-0000-4000-8000-000000000000', 1, 'completed', strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 seconds'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 seconds'), '{}'),
   ('r1', 'eeeeeeee-0000-4000-8000-000000000001', 1, 'completed', strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 seconds'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-60 seconds'), '{}'),
   ('r2', 'eeeeeeee-0000-4000-8000-000000000002', 1, 'completed', strftime('%Y-%m-%dT%H:%M:%fZ','now','-400 seconds'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-300 seconds'), '{}'),
   ('r3', 'eeeeeeee-0000-4000-8000-000000000003', 1, 'completed', strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 seconds'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-60 seconds'), '{}'),
